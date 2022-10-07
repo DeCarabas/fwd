@@ -2,8 +2,11 @@ use bytes::BytesMut;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
-use tokio::net::TcpListener;
+use std::sync::{Arc, Mutex};
+use tokio::io::{
+    AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, Error, ErrorKind,
+};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::process;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -21,7 +24,7 @@ impl<T: AsyncWrite + Unpin> MessageWriter<T> {
     fn new(writer: T) -> MessageWriter<T> {
         MessageWriter { writer }
     }
-    async fn write(self: &mut Self, msg: Message) -> Result<(), tokio::io::Error> {
+    async fn write(self: &mut Self, msg: Message) -> Result<(), Error> {
         // TODO: Optimize buffer usage please this is bad
         let mut buffer = msg.encode();
         self.writer
@@ -36,17 +39,33 @@ impl<T: AsyncWrite + Unpin> MessageWriter<T> {
 async fn pump_write<T: AsyncWrite + Unpin>(
     messages: &mut mpsc::Receiver<Message>,
     writer: &mut MessageWriter<T>,
-) -> Result<(), tokio::io::Error> {
+) -> Result<(), Error> {
     while let Some(msg) = messages.recv().await {
         writer.write(msg).await?;
     }
     Ok(())
 }
 
+async fn server_connect(
+    channel: u64,
+    port: u16,
+    writer: &mut mpsc::Sender<Message>,
+) -> Result<(), Error> {
+    let _stream = TcpStream::connect(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await?;
+    if let Err(e) = writer.send(Message::Connected(channel, port)).await {
+        eprintln!("< Warning: couldn't send Connected: {:?}", e);
+        return Err(Error::from(ErrorKind::BrokenPipe));
+    }
+
+    // Do the thing, read and write and whatnot.
+
+    Ok(())
+}
+
 async fn server_read<T: AsyncRead + Unpin>(
     reader: &mut T,
     writer: mpsc::Sender<Message>,
-) -> Result<(), tokio::io::Error> {
+) -> Result<(), Error> {
     eprintln!("< Processing packets...");
     loop {
         let frame_length = reader.read_u32().await?;
@@ -57,12 +76,22 @@ async fn server_read<T: AsyncRead + Unpin>(
         let mut cursor = Cursor::new(&data[..]);
         let message = match Message::decode(&mut cursor) {
             Ok(msg) => msg,
-            Err(_) => return Err(tokio::io::Error::from(tokio::io::ErrorKind::InvalidData)),
+            Err(_) => return Err(Error::from(ErrorKind::InvalidData)),
         };
 
         use Message::*;
         match message {
             Ping => (),
+            Connect(channel, port) => {
+                let writer = writer.clone();
+                tokio::spawn(async move {
+                    let mut writer = writer;
+                    if let Err(e) = server_connect(channel, port, &mut writer).await {
+                        eprintln!("< Connection failed: {:?}", e);
+                        _ = writer.send(Message::Abort(channel)).await;
+                    }
+                });
+            }
             Refresh => {
                 let writer = writer.clone();
                 tokio::spawn(async move {
@@ -87,7 +116,7 @@ async fn server_read<T: AsyncRead + Unpin>(
 async fn server_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     reader: &mut Reader,
     writer: &mut MessageWriter<Writer>,
-) -> Result<(), tokio::io::Error> {
+) -> Result<(), Error> {
     // Jump into it...
     let (msg_sender, mut msg_receiver) = mpsc::channel(32);
     let writing = pump_write(&mut msg_receiver, writer);
@@ -120,7 +149,7 @@ async fn server_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     }
 }
 
-async fn spawn_ssh(server: &str) -> Result<tokio::process::Child, tokio::io::Error> {
+async fn spawn_ssh(server: &str) -> Result<tokio::process::Child, Error> {
     let mut cmd = process::Command::new("ssh");
     cmd.arg("-T").arg(server).arg("fwd").arg("--server");
 
@@ -129,7 +158,7 @@ async fn spawn_ssh(server: &str) -> Result<tokio::process::Child, tokio::io::Err
     cmd.spawn()
 }
 
-async fn client_sync<T: AsyncRead + Unpin>(reader: &mut T) -> Result<(), tokio::io::Error> {
+async fn client_sync<T: AsyncRead + Unpin>(reader: &mut T) -> Result<(), Error> {
     eprintln!("> Waiting for synchronization marker...");
     let mut seen = 0;
     while seen < 8 {
@@ -139,34 +168,87 @@ async fn client_sync<T: AsyncRead + Unpin>(reader: &mut T) -> Result<(), tokio::
     Ok(())
 }
 
-// struct Connection {
-//     connected: oneshot::Sender<Result<(), tokio::io::Error>>,
-// }
+struct ClientConnection {
+    connected: Option<oneshot::Sender<Result<(), Error>>>,
+}
 
-// struct ConnectionTable {
-//     next_id: u64,
-//     connections: HashMap<u64, Connection>,
-// }
+struct ClientConnectionTable {
+    next_id: u64,
+    connections: HashMap<u64, ClientConnection>,
+}
 
-// type Connections = Arc<Mutex<ConnectionTable>>;
+impl ClientConnectionTable {
+    fn new() -> ClientConnectionTable {
+        ClientConnectionTable {
+            next_id: 0,
+            connections: HashMap::new(),
+        }
+    }
+}
 
-async fn client_listen(port: u16) -> Result<(), tokio::io::Error> {
+type ClientConnections = Arc<Mutex<ClientConnectionTable>>;
+
+async fn client_handle_connection(
+    port: u16,
+    writer: mpsc::Sender<Message>,
+    connections: ClientConnections,
+) {
+    let (connected, rx) = oneshot::channel();
+    let channel_id = {
+        let mut tbl = connections.lock().unwrap();
+        let id = tbl.next_id;
+        tbl.next_id += 1;
+        tbl.connections.insert(
+            id,
+            ClientConnection {
+                connected: Some(connected),
+            },
+        );
+        id
+    };
+
+    if let Ok(_) = writer.send(Message::Connect(channel_id, port)).await {
+        if let Ok(r) = rx.await {
+            if let Ok(_) = r {
+                // Connection worked! Do the damn thing.
+                eprintln!("Got here I guess! {}", channel_id);
+            }
+        }
+    }
+
+    {
+        let mut tbl = connections.lock().unwrap();
+        tbl.connections.remove(&channel_id);
+    }
+    // If the writer is closed then the whole connection is closed.
+    _ = writer.send(Message::Close(channel_id)).await;
+}
+
+async fn client_listen(
+    port: u16,
+    writer: mpsc::Sender<Message>,
+    connections: ClientConnections,
+) -> Result<(), Error> {
     loop {
         let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await?;
         loop {
             // The second item contains the IP and port of the new connection.
             // TODO: Handle shutdown correctly.
-            let (stream, _) = listener.accept().await?;
+            let (_, _) = listener.accept().await?;
 
-            eprintln!("> CONNECTION NOT IMPLEMENTED!");
+            let (writer, connections) = (writer.clone(), connections.clone());
+            tokio::spawn(async move {
+                client_handle_connection(port, writer, connections).await;
+            });
         }
     }
 }
 
 async fn client_read<T: AsyncRead + Unpin>(
     reader: &mut T,
-    _writer: mpsc::Sender<Message>,
-) -> Result<(), tokio::io::Error> {
+    connections: ClientConnections,
+    writer: mpsc::Sender<Message>,
+) -> Result<(), Error> {
     let mut listeners: HashMap<u16, oneshot::Sender<()>> = HashMap::new();
 
     eprintln!("> Processing packets...");
@@ -179,12 +261,27 @@ async fn client_read<T: AsyncRead + Unpin>(
         let mut cursor = Cursor::new(&data[..]);
         let message = match Message::decode(&mut cursor) {
             Ok(msg) => msg,
-            Err(_) => return Err(tokio::io::Error::from(tokio::io::ErrorKind::InvalidData)),
+            Err(_) => return Err(Error::from(ErrorKind::InvalidData)),
         };
 
         use Message::*;
         match message {
             Ping => (),
+            Connected(channel, _) => {
+                let connected = {
+                    let mut tbl = connections.lock().unwrap();
+                    if let Some(c) = tbl.connections.get_mut(&channel) {
+                        c.connected.take()
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(connected) = connected {
+                    // If we can't send the notification then... uh... ok?
+                    _ = connected.send(Ok(()));
+                }
+            }
             Ports(ports) => {
                 let mut new_listeners = HashMap::new();
 
@@ -204,9 +301,10 @@ async fn client_read<T: AsyncRead + Unpin>(
                         let (l, stop) = oneshot::channel();
                         new_listeners.insert(port, l);
 
+                        let (writer, connections) = (writer.clone(), connections.clone());
                         tokio::spawn(async move {
                             let result = tokio::select! {
-                                r = client_listen(port) => r,
+                                r = client_listen(port, writer, connections) => r,
                                 _ = stop => Ok(()),
                             };
                             if let Err(e) = result {
@@ -226,7 +324,7 @@ async fn client_read<T: AsyncRead + Unpin>(
 async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     reader: &mut Reader,
     writer: &mut MessageWriter<Writer>,
-) -> Result<(), tokio::io::Error> {
+) -> Result<(), Error> {
     // First synchronize; we're looking for the 8-zero marker that is the 64b sync marker.
     // This helps us skip garbage like any kind of MOTD or whatnot.
     client_sync(reader).await?;
@@ -235,10 +333,12 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     eprintln!("> Sending initial list command...");
     writer.write(Message::Refresh).await?;
 
+    let connections = Arc::new(Mutex::new(ClientConnectionTable::new()));
+
     // And now really get into it...
     let (msg_sender, mut msg_receiver) = mpsc::channel(32);
     let writing = pump_write(&mut msg_receiver, writer);
-    let reading = client_read(reader, msg_sender);
+    let reading = client_read(reader, connections, msg_sender);
     tokio::pin!(reading);
     tokio::pin!(writing);
 

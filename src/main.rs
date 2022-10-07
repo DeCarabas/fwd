@@ -558,6 +558,8 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     }
 }
 
+// TODO: An actual proper UI.
+
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();

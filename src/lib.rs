@@ -8,7 +8,6 @@ use tokio::process;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-mod error;
 mod message;
 mod refresh;
 
@@ -23,6 +22,42 @@ pub enum Error {
     MessageUnknown,
     MessageCorrupt,
     ConnectionReset,
+}
+
+impl PartialEq for Error {
+    fn eq(&self, other: &Error) -> bool {
+        use Error::*;
+        match self {
+            Protocol => match other {
+                Protocol => true,
+                _ => false,
+            },
+            ProtocolVersion => match other {
+                ProtocolVersion => true,
+                _ => false,
+            },
+            IO(s) => match other {
+                IO(o) => s.kind() == o.kind(),
+                _ => false,
+            },
+            MessageIncomplete => match other {
+                MessageIncomplete => true,
+                _ => false,
+            },
+            MessageUnknown => match other {
+                MessageUnknown => true,
+                _ => false,
+            },
+            MessageCorrupt => match other {
+                MessageCorrupt => true,
+                _ => false,
+            },
+            ConnectionReset => match other {
+                ConnectionReset => true,
+                _ => false,
+            },
+        }
+    }
 }
 
 async fn pump_write<T: AsyncWrite + Unpin>(

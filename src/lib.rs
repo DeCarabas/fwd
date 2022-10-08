@@ -582,6 +582,7 @@ pub async fn run_server() {
 }
 
 pub async fn run_client(remote: &str) {
+    // TODO: Drive a reconnect loop
     let mut child = spawn_ssh(remote).await.expect("failed to spawn");
 
     let mut writer = MessageWriter::new(BufWriter::new(

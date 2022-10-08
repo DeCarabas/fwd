@@ -73,13 +73,14 @@ async fn pump_write<T: AsyncWrite + Unpin>(
 // ----------------------------------------------------------------------------
 // Server
 
-struct ServerConnection {
+struct Connection {
+    connected: Option<oneshot::Sender<()>>,
     data: mpsc::Sender<Bytes>,
 }
 
 #[derive(Clone)]
 struct ServerConnectionTable {
-    connections: Arc<Mutex<HashMap<u64, ServerConnection>>>,
+    connections: Arc<Mutex<HashMap<u64, Connection>>>,
 }
 
 impl ServerConnectionTable {
@@ -91,7 +92,13 @@ impl ServerConnectionTable {
 
     fn add(self: &mut Self, id: u64, data: mpsc::Sender<Bytes>) {
         let mut connections = self.connections.lock().unwrap();
-        connections.insert(id, ServerConnection { data });
+        connections.insert(
+            id,
+            Connection {
+                connected: None,
+                data,
+            },
+        );
     }
 
     async fn receive(self: &Self, id: u64, buf: Bytes) {
@@ -230,18 +237,6 @@ async fn server_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     }
 }
 
-async fn spawn_ssh(server: &str) -> Result<tokio::process::Child, Error> {
-    let mut cmd = process::Command::new("ssh");
-    cmd.arg("-T").arg(server).arg("fwd").arg("--server");
-
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stdin(std::process::Stdio::piped());
-    match cmd.spawn() {
-        Ok(t) => Ok(t),
-        Err(e) => Err(Error::IO(e)),
-    }
-}
-
 async fn client_sync<T: AsyncRead + Unpin>(reader: &mut T) -> Result<(), Error> {
     eprintln!("> Waiting for synchronization marker...");
     let mut seen = 0;
@@ -255,14 +250,9 @@ async fn client_sync<T: AsyncRead + Unpin>(reader: &mut T) -> Result<(), Error> 
     Ok(())
 }
 
-struct ClientConnection {
-    connected: Option<oneshot::Sender<()>>,
-    data: mpsc::Sender<Bytes>,
-}
-
 struct ClientConnectionTableState {
     next_id: u64,
-    connections: HashMap<u64, ClientConnection>,
+    connections: HashMap<u64, Connection>,
 }
 
 #[derive(Clone)]
@@ -286,7 +276,7 @@ impl ClientConnectionTable {
         tbl.next_id += 1;
         tbl.connections.insert(
             id,
-            ClientConnection {
+            Connection {
                 connected: Some(connected),
                 data,
             },
@@ -529,6 +519,18 @@ pub async fn run_server() {
     let mut reader = MessageReader::new(reader);
     if let Err(e) = server_main(&mut reader, &mut writer).await {
         eprintln!("Error: {:?}", e);
+    }
+}
+
+async fn spawn_ssh(server: &str) -> Result<tokio::process::Child, Error> {
+    let mut cmd = process::Command::new("ssh");
+    cmd.arg("-T").arg(server).arg("fwd").arg("--server");
+
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stdin(std::process::Stdio::piped());
+    match cmd.spawn() {
+        Ok(t) => Ok(t),
+        Err(e) => Err(Error::IO(e)),
     }
 }
 

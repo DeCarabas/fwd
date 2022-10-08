@@ -1,43 +1,28 @@
 use bytes::{Bytes, BytesMut};
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::{Arc, Mutex};
-use tokio::io::{
-    AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter, Error, ErrorKind,
-};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
+mod error;
 mod message;
 mod refresh;
 
-use message::Message;
+use message::{Message, MessageReader, MessageWriter};
 
-// ----------------------------------------------------------------------------
-// Message Writing
-
-struct MessageWriter<T: AsyncWrite + Unpin> {
-    writer: T,
-}
-
-impl<T: AsyncWrite + Unpin> MessageWriter<T> {
-    fn new(writer: T) -> MessageWriter<T> {
-        MessageWriter { writer }
-    }
-    async fn write(self: &mut Self, msg: Message) -> Result<(), Error> {
-        // TODO: Optimize buffer usage please this is bad
-        // eprintln!("? {:?}", msg);
-        let mut buffer = msg.encode();
-        self.writer
-            .write_u32(buffer.len().try_into().expect("Message too large"))
-            .await?;
-        self.writer.write_buf(&mut buffer).await?;
-        self.writer.flush().await?;
-        Ok(())
-    }
+#[derive(Debug)]
+pub enum Error {
+    Protocol,
+    ProtocolVersion,
+    IO(tokio::io::Error),
+    MessageIncomplete,
+    MessageUnknown,
+    MessageCorrupt,
+    ConnectionReset,
 }
 
 async fn pump_write<T: AsyncWrite + Unpin>(
@@ -63,14 +48,14 @@ async fn connection_read<T: AsyncRead + Unpin>(
     let result = loop {
         let mut buffer = BytesMut::with_capacity(64 * 1024);
         if let Err(e) = read.read_buf(&mut buffer).await {
-            break Err(e);
+            break Err(Error::IO(e));
         }
         if buffer.len() == 0 {
             break Ok(());
         }
 
         if let Err(_) = writer.send(Message::Data(channel, buffer.into())).await {
-            break Err(Error::from(ErrorKind::ConnectionReset));
+            break Err(Error::ConnectionReset);
         }
 
         // TODO: Flow control here, wait for the packet to be acknowleged so
@@ -91,7 +76,9 @@ async fn connection_write<T: AsyncWrite + Unpin>(
     write: &mut T,
 ) -> Result<(), Error> {
     while let Some(buf) = data.recv().await {
-        write.write_all(&buf[..]).await?;
+        if let Err(e) = write.write_all(&buf[..]).await {
+            return Err(Error::IO(e));
+        }
     }
     Ok(())
 }
@@ -183,28 +170,16 @@ async fn server_handle_connection(
             eprintln!("< Done server!");
         }
     }
-
-    // Wrong!
-    _ = writer.send(Message::Closed(channel));
 }
 
 async fn server_read<T: AsyncRead + Unpin>(
-    reader: &mut T,
+    reader: &mut MessageReader<T>,
     writer: mpsc::Sender<Message>,
     connections: ServerConnectionTable,
 ) -> Result<(), Error> {
     eprintln!("< Processing packets...");
     loop {
-        let frame_length = reader.read_u32().await?;
-
-        let mut data = BytesMut::with_capacity(frame_length.try_into().unwrap());
-        reader.read_buf(&mut data).await?;
-
-        let mut cursor = Cursor::new(&data[..]);
-        let message = match Message::decode(&mut cursor) {
-            Ok(msg) => msg,
-            Err(_) => return Err(Error::from(ErrorKind::InvalidData)),
-        };
+        let message = reader.read().await?;
 
         use Message::*;
         match message {
@@ -253,10 +228,13 @@ async fn server_read<T: AsyncRead + Unpin>(
 }
 
 async fn server_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
-    reader: &mut Reader,
+    reader: &mut MessageReader<Reader>,
     writer: &mut MessageWriter<Writer>,
 ) -> Result<(), Error> {
     let connections = ServerConnectionTable::new();
+
+    // The first message we send must be an announcement.
+    writer.write(Message::Hello(0, 1, vec![])).await?;
 
     // Jump into it...
     let (msg_sender, mut msg_receiver) = mpsc::channel(32);
@@ -296,14 +274,20 @@ async fn spawn_ssh(server: &str) -> Result<tokio::process::Child, Error> {
 
     cmd.stdout(std::process::Stdio::piped());
     cmd.stdin(std::process::Stdio::piped());
-    cmd.spawn()
+    match cmd.spawn() {
+        Ok(t) => Ok(t),
+        Err(e) => Err(Error::IO(e)),
+    }
 }
 
 async fn client_sync<T: AsyncRead + Unpin>(reader: &mut T) -> Result<(), Error> {
     eprintln!("> Waiting for synchronization marker...");
     let mut seen = 0;
     while seen < 8 {
-        let byte = reader.read_u8().await?;
+        let byte = match reader.read_u8().await {
+            Ok(b) => b,
+            Err(e) => return Err(Error::IO(e)),
+        };
         seen = if byte == 0 { seen + 1 } else { 0 };
     }
     Ok(())
@@ -413,11 +397,17 @@ async fn client_listen(
     connections: ClientConnectionTable,
 ) -> Result<(), Error> {
     loop {
-        let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await?;
+        let listener = match TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await {
+            Ok(t) => t,
+            Err(e) => return Err(Error::IO(e)),
+        };
         loop {
             // The second item contains the IP and port of the new
             // connection, but we don't care.
-            let (mut socket, _) = listener.accept().await?;
+            let (mut socket, _) = match listener.accept().await {
+                Ok(s) => s,
+                Err(e) => return Err(Error::IO(e)),
+            };
 
             let (writer, connections) = (writer.clone(), connections.clone());
             tokio::spawn(async move {
@@ -428,7 +418,7 @@ async fn client_listen(
 }
 
 async fn client_read<T: AsyncRead + Unpin>(
-    reader: &mut T,
+    reader: &mut MessageReader<T>,
     writer: mpsc::Sender<Message>,
     connections: ClientConnectionTable,
 ) -> Result<(), Error> {
@@ -436,16 +426,7 @@ async fn client_read<T: AsyncRead + Unpin>(
 
     eprintln!("> Processing packets...");
     loop {
-        let frame_length = reader.read_u32().await?;
-
-        let mut data = BytesMut::with_capacity(frame_length.try_into().unwrap());
-        reader.read_buf(&mut data).await?;
-
-        let mut cursor = Cursor::new(&data[..]);
-        let message = match Message::decode(&mut cursor) {
-            Ok(msg) => msg,
-            Err(_) => return Err(Error::from(ErrorKind::InvalidData)),
-        };
+        let message = reader.read().await?;
 
         use Message::*;
         match message {
@@ -513,14 +494,19 @@ async fn client_read<T: AsyncRead + Unpin>(
 }
 
 async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
-    reader: &mut Reader,
+    reader: &mut MessageReader<Reader>,
     writer: &mut MessageWriter<Writer>,
 ) -> Result<(), Error> {
-    // First synchronize; we're looking for the 8-zero marker that is the 64b sync marker.
-    // This helps us skip garbage like any kind of MOTD or whatnot.
-    client_sync(reader).await?;
+    // Wait for the server's announcement.
+    if let Message::Hello(major, minor, _) = reader.read().await? {
+        if major != 0 || minor > 1 {
+            return Err(Error::ProtocolVersion);
+        }
+    } else {
+        return Err(Error::Protocol);
+    }
 
-    // Now kick things off with a listing of the ports...
+    // Kick things off with a listing of the ports...
     eprintln!("> Sending initial list command...");
     writer.write(Message::Refresh).await?;
 
@@ -561,21 +547,24 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
 /////
 
 pub async fn run_server() {
-    let mut reader = BufReader::new(tokio::io::stdin());
+    let reader = BufReader::new(tokio::io::stdin());
     let mut writer = BufWriter::new(tokio::io::stdout());
 
-    // Write the marker.
+    // Write the 8-byte synchronization marker.
     eprintln!("< Writing marker...");
     writer
         .write_u64(0x00_00_00_00_00_00_00_00)
         .await
         .expect("Error writing marker");
 
-    writer.flush().await.expect("Error flushing buffer");
+    if let Err(e) = writer.flush().await {
+        eprintln!("Error writing sync marker: {:?}", e);
+        return;
+    }
     eprintln!("< Done!");
 
     let mut writer = MessageWriter::new(writer);
-
+    let mut reader = MessageReader::new(reader);
     if let Err(e) = server_main(&mut reader, &mut writer).await {
         eprintln!("Error: {:?}", e);
     }
@@ -599,6 +588,12 @@ pub async fn run_client(remote: &str) {
             .expect("child did not have a handle to stdout"),
     );
 
+    if let Err(e) = client_sync(&mut reader).await {
+        eprintln!("Error synchronizing: {:?}", e);
+        return;
+    }
+
+    let mut reader = MessageReader::new(reader);
     if let Err(e) = client_main(&mut reader, &mut writer).await {
         eprintln!("Error: {:?}", e);
     }

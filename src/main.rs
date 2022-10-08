@@ -563,6 +563,11 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() != 2 {
+        eprintln!("Usage: fwd <server>");
+        std::process::exit(1);
+    }
+
     let remote = &args[1];
     if remote == "--server" {
         let mut reader = BufReader::new(tokio::io::stdin());

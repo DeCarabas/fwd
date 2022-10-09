@@ -1,8 +1,9 @@
 use crate::message::PortDesc;
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 #[cfg(not(target_os = "linux"))]
 pub fn get_entries() -> Result<Vec<PortDesc>> {
+    use anyhow::bail;
     bail!("Not supported on this operating system");
 }
 

@@ -1,5 +1,5 @@
 use crate::message::Message;
-use crate::Error;
+use anyhow::Result;
 use bytes::{Bytes, BytesMut};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -30,11 +30,11 @@ async fn connection_read<T: AsyncRead + Unpin>(
     channel: u64,
     read: &mut T,
     writer: &mut mpsc::Sender<Message>,
-) -> Result<(), Error> {
+) -> Result<(), tokio::io::Error> {
     let result = loop {
         let mut buffer = BytesMut::with_capacity(MAX_PACKET);
         if let Err(e) = read.read_buf(&mut buffer).await {
-            break Err(Error::IO(e));
+            break Err(e);
         }
 
         if buffer.len() == 0 {
@@ -42,7 +42,9 @@ async fn connection_read<T: AsyncRead + Unpin>(
         }
 
         if let Err(_) = writer.send(Message::Data(channel, buffer.into())).await {
-            break Err(Error::ConnectionReset);
+            break Err(tokio::io::Error::from(
+                tokio::io::ErrorKind::ConnectionReset,
+            ));
         }
 
         // TODO: Flow control here, wait for the packet to be acknowleged so
@@ -65,11 +67,9 @@ async fn connection_read<T: AsyncRead + Unpin>(
 async fn connection_write<T: AsyncWrite + Unpin>(
     data: &mut mpsc::Receiver<Bytes>,
     write: &mut T,
-) -> Result<(), Error> {
+) -> Result<()> {
     while let Some(buf) = data.recv().await {
-        if let Err(e) = write.write_all(&buf[..]).await {
-            return Err(Error::IO(e));
-        }
+        write.write_all(&buf[..]).await?;
     }
     Ok(())
 }

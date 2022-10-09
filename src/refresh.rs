@@ -1,21 +1,13 @@
 use crate::message::PortDesc;
-use crate::Error;
+use anyhow::{bail, Result};
 
 #[cfg(not(target_os = "linux"))]
-pub fn get_entries() -> Result<Vec<PortDesc>, Error> {
-    Err(Error::NotSupported)
+pub fn get_entries() -> Result<Vec<PortDesc>> {
+    bail!("Not supported on this operating system");
 }
 
 #[cfg(target_os = "linux")]
-pub fn get_entries() -> Result<Vec<PortDesc>, Error> {
-    match get_entries_linux() {
-        Ok(v) => Ok(v),
-        Err(e) => Err(Error::ProcFs(format!("{:?}", e))),
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub fn get_entries_linux() -> procfs::ProcResult<Vec<PortDesc>> {
+pub fn get_entries() -> Result<Vec<PortDesc>> {
     use procfs::process::FDTarget;
     use std::collections::HashMap;
 

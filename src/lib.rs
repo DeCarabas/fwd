@@ -22,6 +22,8 @@ pub enum Error {
     MessageUnknown,
     MessageCorrupt,
     ConnectionReset,
+    ProcFs(String),
+    NotSupported,
 }
 
 impl PartialEq for Error {
@@ -54,6 +56,14 @@ impl PartialEq for Error {
             },
             ConnectionReset => match other {
                 ConnectionReset => true,
+                _ => false,
+            },
+            ProcFs(a) => match other {
+                ProcFs(b) => a == b,
+                _ => false,
+            },
+            NotSupported => match other {
+                NotSupported => true,
                 _ => false,
             },
         }

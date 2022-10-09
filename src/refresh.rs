@@ -1,8 +1,24 @@
 use crate::message::PortDesc;
-use procfs::process::FDTarget;
-use std::collections::HashMap;
+use crate::Error;
 
-pub fn get_entries() -> procfs::ProcResult<Vec<PortDesc>> {
+#[cfg(not(target_os = "linux"))]
+pub fn get_entries() -> Result<Vec<PortDesc>, Error> {
+    Err(Error::NotSupported)
+}
+
+#[cfg(target_os = "linux")]
+pub fn get_entries() -> Result<Vec<PortDesc>, Error> {
+    match get_entries_linux() {
+        Ok(v) => Ok(v),
+        Err(e) => Err(Error::ProcFs(format!("{:?}", e))),
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn get_entries_linux() -> procfs::ProcResult<Vec<PortDesc>> {
+    use procfs::process::FDTarget;
+    use std::collections::HashMap;
+
     let all_procs = procfs::process::all_processes()?;
 
     // build up a map between socket inodes and process stat info. Ignore any

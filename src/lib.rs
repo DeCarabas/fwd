@@ -1,8 +1,7 @@
-use bytes::Bytes;
+use connection::ConnectionTable;
 use message::{Message, MessageReader, MessageWriter};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process;
@@ -70,6 +69,26 @@ impl PartialEq for Error {
     }
 }
 
+// ----------------------------------------------------------------------------
+// Write Management
+
+/// Gathers writes from an mpsc queue and writes them to the specified
+/// writer.
+///
+/// This is kind of an odd function. It raises a lot of questions.
+///
+/// *Why can't this just be a wrapper function on top of MessageWriter that
+/// everybody calls?* Well, we could do that, but we also need to synchronize
+/// writes to the underlying stream.
+///
+/// *Why not use an async mutex?* Because this function has a nice side
+/// benefit: if it ever quits, we're *either* doing an orderly shutdown
+/// (because the last write end of this channel closed) *or* the remote
+/// connection has closed. [client_main] uses this fact to its advantage to
+/// detect when the connection has failed.
+///
+/// At some point we may even automatically reconnect in response!
+///
 async fn pump_write<T: AsyncWrite + Unpin>(
     messages: &mut mpsc::Receiver<Message>,
     writer: &mut MessageWriter<T>,
@@ -82,92 +101,6 @@ async fn pump_write<T: AsyncWrite + Unpin>(
 
 // ----------------------------------------------------------------------------
 // Server
-
-struct Connection {
-    connected: Option<oneshot::Sender<()>>,
-    data: mpsc::Sender<Bytes>,
-}
-
-struct ConnectionTableState {
-    next_id: u64,
-    connections: HashMap<u64, Connection>,
-}
-
-#[derive(Clone)]
-struct ConnectionTable {
-    connections: Arc<Mutex<ConnectionTableState>>,
-}
-
-impl ConnectionTable {
-    fn new() -> ConnectionTable {
-        ConnectionTable {
-            connections: Arc::new(Mutex::new(ConnectionTableState {
-                next_id: 0,
-                connections: HashMap::new(),
-            })),
-        }
-    }
-
-    fn alloc(self: &mut Self, connected: oneshot::Sender<()>, data: mpsc::Sender<Bytes>) -> u64 {
-        let mut tbl = self.connections.lock().unwrap();
-        let id = tbl.next_id;
-        tbl.next_id += 1;
-        tbl.connections.insert(
-            id,
-            Connection {
-                connected: Some(connected),
-                data,
-            },
-        );
-        id
-    }
-
-    fn add(self: &mut Self, id: u64, data: mpsc::Sender<Bytes>) {
-        let mut tbl = self.connections.lock().unwrap();
-        tbl.connections.insert(
-            id,
-            Connection {
-                connected: None,
-                data,
-            },
-        );
-    }
-
-    fn connected(self: &mut Self, id: u64) {
-        let connected = {
-            let mut tbl = self.connections.lock().unwrap();
-            if let Some(c) = tbl.connections.get_mut(&id) {
-                c.connected.take()
-            } else {
-                None
-            }
-        };
-
-        if let Some(connected) = connected {
-            _ = connected.send(());
-        }
-    }
-
-    async fn receive(self: &Self, id: u64, buf: Bytes) {
-        let data = {
-            let tbl = self.connections.lock().unwrap();
-            if let Some(connection) = tbl.connections.get(&id) {
-                Some(connection.data.clone())
-            } else {
-                None
-            }
-        };
-
-        if let Some(data) = data {
-            _ = data.send(buf).await;
-        }
-    }
-
-    fn remove(self: &mut Self, id: u64) {
-        let mut tbl = self.connections.lock().unwrap();
-        tbl.connections.remove(&id);
-    }
-}
 
 async fn server_handle_connection(
     channel: u64,
@@ -285,6 +218,10 @@ async fn server_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
 }
 
 async fn client_sync<T: AsyncRead + Unpin>(reader: &mut T) -> Result<(), Error> {
+    // TODO: While we're waiting here we should be echoing everything we read.
+    //       We should also be proxying *our* stdin to the processes stdin,
+    //       and turn that off when we've synchronized. That way we can
+    //       handle passwords and the like for authentication.
     eprintln!("> Waiting for synchronization marker...");
     let mut seen = 0;
     while seen < 8 {

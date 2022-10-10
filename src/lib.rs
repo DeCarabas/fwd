@@ -359,7 +359,7 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
                     if let Err(e) = refresher.send(Message::Refresh).await {
                         break Err::<(), _>(e);
                     }
-                    sleep(Duration::from_millis(100)).await;
+                    sleep(Duration::from_millis(500)).await;
                 }
             }, if !done_writing => {
                 if let Err(e) = result {

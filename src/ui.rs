@@ -61,7 +61,7 @@ async fn run_ui_core(port_receiver: &mut mpsc::Receiver<Vec<PortDesc>>) -> Resul
         let columns: usize = columns.into();
         let padding = 1;
         let port_width = 5; // 5 characters for 16-bit number
-        let url_width = "http://localhost:/".len() + port_width;
+        let url_width = "http://127.0.0.1:/".len() + port_width;
 
         let description_width = columns - (padding + port_width + padding + url_width + padding);
 
@@ -81,7 +81,7 @@ async fn run_ui_core(port_receiver: &mut mpsc::Receiver<Vec<PortDesc>>) -> Resul
                 print!(
                     " {:port_width$} {:url_width$} {:description_width$}\r\n",
                     port.port,
-                    format!("http://locahost:{}/", port.port),
+                    format!("http://127.0.0.1:{}/", port.port),
                     port.desc
                 );
             }

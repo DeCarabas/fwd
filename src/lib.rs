@@ -105,14 +105,14 @@ async fn server_read<T: AsyncRead + Unpin>(
                 tokio::spawn(async move {
                     let ports = match refresh::get_entries() {
                         Ok(ports) => ports,
-                        Err(_) => {
-                            // eprintln!("< Error scanning: {:?}", e);
+                        Err(_e) => {
+                            // eprintln!("< Error scanning: {:?}", _e);
                             vec![]
                         }
                     };
-                    if let Err(_) = writer.send(Message::Ports(ports)).await {
+                    if let Err(_e) = writer.send(Message::Ports(ports)).await {
                         // Writer has been closed for some reason, we can just quit.... I hope everything is OK?
-                        // eprintln!("< Warning: Error sending: {:?}", e);
+                        // eprintln!("< Warning: Error sending: {:?}", _e);
                     }
                 });
             }
@@ -227,9 +227,13 @@ async fn client_listen(
     loop {
         let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await?;
         loop {
+            // eprintln!("LISTENING ON PORT {port}");
+
             // The second item contains the IP and port of the new
             // connection, but we don't care.
             let (mut socket, _) = listener.accept().await?;
+
+            // eprintln!("GOT ONE!");
 
             let (writer, connections) = (writer.clone(), connections.clone());
             tokio::spawn(async move {
@@ -298,8 +302,10 @@ async fn client_read<T: AsyncRead + Unpin>(
                                 r = client_listen(port, writer, connections) => r,
                                 _ = stop => Ok(()),
                             };
-                            if let Err(_) = result {
-                                // eprintln!("> Error listening on port {}: {:?}", port, e);
+                            if let Err(_e) = result {
+                                // eprintln!("> Error listening on port {port}: {_e:?}");
+                            } else {
+                                // eprintln!("> Stopped listening on port {port}");
                             }
                         });
                     }

@@ -335,7 +335,7 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     let (port_sender, mut port_receiver) = mpsc::channel(2);
     let connections = ConnectionTable::new();
 
-    let ui = tokio::spawn(async move { ui::run_ui(&mut port_receiver).await });
+    let mut ui = tokio::spawn(async move { ui::run_ui(&mut port_receiver).await });
 
     // And now really get into it...
     let (msg_sender, mut msg_receiver) = mpsc::channel(32);
@@ -349,6 +349,10 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     let (mut done_writing, mut done_reading) = (false, false);
     while !(done_reading && done_writing) {
         tokio::select! {
+            _ = &mut ui => {
+                // UI said to quit.
+                break;
+            }
             result = async {
                 loop {
                     use tokio::time::{sleep, Duration};
@@ -375,10 +379,6 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
                 }
             },
         }
-    }
-
-    if let Err(_) = ui.await {
-        //TODO
     }
     Ok(())
 }

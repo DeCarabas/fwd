@@ -12,6 +12,7 @@ use tokio::sync::oneshot;
 mod connection;
 mod message;
 mod refresh;
+mod ui;
 
 // ----------------------------------------------------------------------------
 // Write Management
@@ -60,7 +61,7 @@ async fn server_handle_connection(
             let mut writer = writer.clone();
             connection::process(channel, &mut stream, &mut data, &mut writer).await;
 
-            eprintln!("< Done server!");
+            // eprintln!("< Done server!");
         }
     }
 }
@@ -70,7 +71,7 @@ async fn server_read<T: AsyncRead + Unpin>(
     writer: mpsc::Sender<Message>,
     connections: ConnectionTable,
 ) -> Result<()> {
-    eprintln!("< Processing packets...");
+    // eprintln!("< Processing packets...");
     loop {
         let message = reader.read().await?;
 
@@ -104,14 +105,14 @@ async fn server_read<T: AsyncRead + Unpin>(
                 tokio::spawn(async move {
                     let ports = match refresh::get_entries() {
                         Ok(ports) => ports,
-                        Err(e) => {
-                            eprintln!("< Error scanning: {:?}", e);
+                        Err(_) => {
+                            // eprintln!("< Error scanning: {:?}", e);
                             vec![]
                         }
                     };
-                    if let Err(e) = writer.send(Message::Ports(ports)).await {
+                    if let Err(_) = writer.send(Message::Ports(ports)).await {
                         // Writer has been closed for some reason, we can just quit.... I hope everything is OK?
-                        eprintln!("< Warning: Error sending: {:?}", e);
+                        // eprintln!("< Warning: Error sending: {:?}", e);
                     }
                 });
             }
@@ -165,7 +166,7 @@ async fn client_sync<Read: AsyncRead + Unpin, Write: AsyncWrite + Unpin>(
     reader: &mut Read,
     writer: &mut Write,
 ) -> Result<(), tokio::io::Error> {
-    eprintln!("> Waiting for synchronization marker...");
+    // eprintln!("> Waiting for synchronization marker...");
 
     // Run these two loops in parallel; the copy of stdin should stop when
     // we've seen the marker from the client. If the pipe closes for whatever
@@ -211,9 +212,9 @@ async fn client_handle_connection(
             let mut writer = writer.clone();
             connection::process(channel, socket, &mut data, &mut writer).await;
 
-            eprintln!("> Done client!");
+            // eprintln!("> Done client!");
         } else {
-            eprintln!("> Failed to connect to remote");
+            // eprintln!("> Failed to connect to remote");
         }
     }
 }
@@ -242,10 +243,11 @@ async fn client_read<T: AsyncRead + Unpin>(
     reader: &mut MessageReader<T>,
     writer: mpsc::Sender<Message>,
     connections: ConnectionTable,
+    port_sender: mpsc::Sender<Vec<message::PortDesc>>,
 ) -> Result<()> {
     let mut listeners: HashMap<u16, oneshot::Sender<()>> = HashMap::new();
 
-    eprintln!("> Processing packets...");
+    // eprintln!("> Processing packets...");
     loop {
         let message = reader.read().await?;
 
@@ -272,11 +274,7 @@ async fn client_read<T: AsyncRead + Unpin>(
             }
             Ports(ports) => {
                 let mut new_listeners = HashMap::new();
-
-                println!("The following ports are available:");
-                for port in ports {
-                    println!("  {}: {}", port.port, port.desc);
-
+                for port in &ports {
                     let port = port.port;
                     if let Some(l) = listeners.remove(&port) {
                         if !l.is_closed() {
@@ -300,14 +298,17 @@ async fn client_read<T: AsyncRead + Unpin>(
                                 r = client_listen(port, writer, connections) => r,
                                 _ = stop => Ok(()),
                             };
-                            if let Err(e) = result {
-                                eprintln!("> Error listening on port {}: {:?}", port, e);
+                            if let Err(_) = result {
+                                // eprintln!("> Error listening on port {}: {:?}", port, e);
                             }
                         });
                     }
                 }
 
                 listeners = new_listeners;
+                if let Err(_) = port_sender.send(ports).await {
+                    // TODO: Log
+                }
             }
             _ => panic!("Unsupported: {:?}", message),
         };
@@ -328,28 +329,43 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     }
 
     // Kick things off with a listing of the ports...
-    eprintln!("> Sending initial list command...");
-    writer.write(Message::Refresh).await?;
+    // eprintln!("> Sending initial list command...");
+    // writer.write(Message::Refresh).await?;
 
+    let (port_sender, mut port_receiver) = mpsc::channel(2);
     let connections = ConnectionTable::new();
+
+    let ui = tokio::spawn(async move { ui::run_ui(&mut port_receiver).await });
 
     // And now really get into it...
     let (msg_sender, mut msg_receiver) = mpsc::channel(32);
+    let refresher = msg_sender.clone(); // Special for loop.
+
     let writing = pump_write(&mut msg_receiver, writer);
-    let reading = client_read(reader, msg_sender, connections);
+    let reading = client_read(reader, msg_sender, connections, port_sender);
     tokio::pin!(reading);
     tokio::pin!(writing);
 
     let (mut done_writing, mut done_reading) = (false, false);
-    loop {
+    while !(done_reading && done_writing) {
         tokio::select! {
+            result = async {
+                loop {
+                    use tokio::time::{sleep, Duration};
+                    if let Err(e) = refresher.send(Message::Refresh).await {
+                        break Err::<(), _>(e);
+                    }
+                    sleep(Duration::from_millis(100)).await;
+                }
+            }, if !done_writing => {
+                if let Err(e) = result {
+                    return Err(e.into());
+                }
+            },
             result = &mut writing, if !done_writing => {
                 done_writing = true;
                 if let Err(e) = result {
                     return Err(e);
-                }
-                if done_reading && done_writing {
-                    return Ok(());
                 }
             },
             result = &mut reading, if !done_reading => {
@@ -357,12 +373,14 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
                 if let Err(e) = result {
                     return Err(e);
                 }
-                if done_reading && done_writing {
-                    return Ok(());
-                }
             },
         }
     }
+
+    if let Err(_) = ui.await {
+        //TODO
+    }
+    Ok(())
 }
 
 /////
@@ -372,22 +390,22 @@ pub async fn run_server() {
     let mut writer = BufWriter::new(tokio::io::stdout());
 
     // Write the 8-byte synchronization marker.
-    eprintln!("< Writing marker...");
+    // eprintln!("< Writing marker...");
     writer
         .write_u64(0x00_00_00_00_00_00_00_00)
         .await
         .expect("Error writing marker");
 
-    if let Err(e) = writer.flush().await {
-        eprintln!("Error writing sync marker: {:?}", e);
+    if let Err(_) = writer.flush().await {
+        // eprintln!("Error writing sync marker: {:?}", e);
         return;
     }
-    eprintln!("< Done!");
+    // eprintln!("< Done!");
 
     let mut writer = MessageWriter::new(writer);
     let mut reader = MessageReader::new(reader);
-    if let Err(e) = server_main(&mut reader, &mut writer).await {
-        eprintln!("Error: {:?}", e);
+    if let Err(_) = server_main(&mut reader, &mut writer).await {
+        // eprintln!("Error: {:?}", e);
     }
 }
 

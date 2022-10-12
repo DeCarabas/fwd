@@ -10,24 +10,59 @@ use crossterm::{
         EnterAlternateScreen, LeaveAlternateScreen,
     },
 };
+use log::{Level, LevelFilter, Metadata, Record};
+use std::collections::vec_deque::VecDeque;
 use std::io::{stdout, Write};
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
-pub async fn run_ui(port_receiver: &mut mpsc::Receiver<Vec<PortDesc>>) -> Result<()> {
+#[derive(Debug, Clone)]
+pub struct Logger {
+    line_sender: mpsc::Sender<String>,
+}
+
+impl Logger {
+    pub fn new(line_sender: mpsc::Sender<String>) -> Box<Logger> {
+        Box::new(Logger { line_sender })
+    }
+}
+
+impl log::Log for Logger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        metadata.level() <= Level::Info
+    }
+
+    fn log(&self, record: &Record) {
+        if self.enabled(record.metadata()) {
+            let line = format!("{} - {}", record.level(), record.args());
+            _ = self.line_sender.try_send(line);
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+pub async fn run_ui(
+    port_receiver: &mut mpsc::Receiver<Vec<PortDesc>>,
+    log_receiver: &mut mpsc::Receiver<String>,
+) -> Result<()> {
     enable_raw_mode()?;
-    let result = run_ui_core(port_receiver).await;
+    let result = run_ui_core(port_receiver, log_receiver).await;
     execute!(stdout(), EnableLineWrap, LeaveAlternateScreen)?;
     disable_raw_mode()?;
     result
 }
 
-async fn run_ui_core(port_receiver: &mut mpsc::Receiver<Vec<PortDesc>>) -> Result<()> {
+async fn run_ui_core(
+    port_receiver: &mut mpsc::Receiver<Vec<PortDesc>>,
+    log: &mut mpsc::Receiver<String>,
+) -> Result<()> {
     let mut stdout = stdout();
 
     execute!(stdout, EnterAlternateScreen, DisableLineWrap)?;
     let mut events = EventStream::new();
 
+    let mut lines: VecDeque<String> = VecDeque::with_capacity(1024);
     let mut ports = None;
     loop {
         tokio::select! {
@@ -48,6 +83,17 @@ async fn run_ui_core(port_receiver: &mut mpsc::Receiver<Vec<PortDesc>>) -> Resul
             pr = port_receiver.recv() => {
                 match pr {
                     Some(p) => { ports = Some(p); }
+                    None => break,
+                }
+            }
+            l = log.recv() => {
+                match l {
+                    Some(line) => {
+                        if lines.len() > 1024 {
+                            lines.pop_front();
+                        }
+                        lines.push_back(line);
+                    },
                     None => break,
                 }
             }
@@ -77,7 +123,7 @@ async fn run_ui_core(port_receiver: &mut mpsc::Receiver<Vec<PortDesc>>) -> Resul
         );
         if let Some(ports) = &mut ports {
             ports.sort_by(|a, b| a.port.partial_cmp(&b.port).unwrap());
-            for port in ports {
+            for port in ports.into_iter().take(((rows / 2) - 1).into()) {
                 print!(
                     " {:port_width$} {:url_width$} {:description_width$}\r\n",
                     port.port,
@@ -85,6 +131,18 @@ async fn run_ui_core(port_receiver: &mut mpsc::Receiver<Vec<PortDesc>>) -> Resul
                     port.desc
                 );
             }
+        }
+
+        let hr: usize = ((rows / 2) - 1).into();
+        let start: usize = if lines.len() > hr {
+            lines.len() - hr
+        } else {
+            0
+        };
+
+        queue!(stdout, MoveTo(0, rows / 2))?;
+        for line in lines.range(start..) {
+            print!("{}\r\n", line);
         }
 
         queue!(stdout, MoveTo(0, rows - 1))?;

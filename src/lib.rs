@@ -1,9 +1,14 @@
 use anyhow::{bail, Result};
 use connection::ConnectionTable;
+use log::LevelFilter;
+use log::{error, info, warn};
 use message::{Message, MessageReader, MessageWriter};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{
+    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
+    BufWriter,
+};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process;
 use tokio::sync::mpsc;
@@ -61,7 +66,7 @@ async fn server_handle_connection(
             let mut writer = writer.clone();
             connection::process(channel, &mut stream, &mut data, &mut writer).await;
 
-            // eprintln!("< Done server!");
+            info!("< Done server!");
         }
     }
 }
@@ -71,7 +76,7 @@ async fn server_read<T: AsyncRead + Unpin>(
     writer: mpsc::Sender<Message>,
     connections: ConnectionTable,
 ) -> Result<()> {
-    // eprintln!("< Processing packets...");
+    // info!("< Processing packets...");
     loop {
         let message = reader.read().await?;
 
@@ -106,13 +111,13 @@ async fn server_read<T: AsyncRead + Unpin>(
                     let ports = match refresh::get_entries() {
                         Ok(ports) => ports,
                         Err(_e) => {
-                            // eprintln!("< Error scanning: {:?}", _e);
+                            error!("< Error scanning: {:?}", _e);
                             vec![]
                         }
                     };
                     if let Err(_e) = writer.send(Message::Ports(ports)).await {
                         // Writer has been closed for some reason, we can just quit.... I hope everything is OK?
-                        // eprintln!("< Warning: Error sending: {:?}", _e);
+                        warn!("< Warning: Error sending: {:?}", _e);
                     }
                 });
             }
@@ -163,7 +168,7 @@ async fn server_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
 }
 
 async fn client_sync<Read: AsyncRead + Unpin>(reader: &mut Read) -> Result<(), tokio::io::Error> {
-    // eprintln!("> Waiting for synchronization marker...");
+    info!("> Waiting for synchronization marker...");
 
     // Run these two loops in parallel; the copy of stdin should stop when
     // we've seen the marker from the client. If the pipe closes for whatever
@@ -202,9 +207,9 @@ async fn client_handle_connection(
             let mut writer = writer.clone();
             connection::process(channel, socket, &mut data, &mut writer).await;
 
-            // eprintln!("> Done client!");
+            info!("> Done client!");
         } else {
-            // eprintln!("> Failed to connect to remote");
+            error!("> Failed to connect to remote");
         }
     }
 }
@@ -217,13 +222,9 @@ async fn client_listen(
     loop {
         let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await?;
         loop {
-            // eprintln!("LISTENING ON PORT {port}");
-
             // The second item contains the IP and port of the new
             // connection, but we don't care.
             let (mut socket, _) = listener.accept().await?;
-
-            // eprintln!("GOT ONE!");
 
             let (writer, connections) = (writer.clone(), connections.clone());
             tokio::spawn(async move {
@@ -241,9 +242,10 @@ async fn client_read<T: AsyncRead + Unpin>(
 ) -> Result<()> {
     let mut listeners: HashMap<u16, oneshot::Sender<()>> = HashMap::new();
 
-    // eprintln!("> Processing packets...");
+    info!("> Processing packets...");
     loop {
         let message = reader.read().await?;
+        info!("> packet {:?}", message);
 
         use Message::*;
         match message {
@@ -293,9 +295,9 @@ async fn client_read<T: AsyncRead + Unpin>(
                                 _ = stop => Ok(()),
                             };
                             if let Err(_e) = result {
-                                // eprintln!("> Error listening on port {port}: {_e:?}");
+                                error!("> Error listening on port {port}: {_e:?}");
                             } else {
-                                // eprintln!("> Stopped listening on port {port}");
+                                info!("> Stopped listening on port {port}");
                             }
                         });
                     }
@@ -311,9 +313,27 @@ async fn client_read<T: AsyncRead + Unpin>(
     }
 }
 
+async fn client_pipe_stderr<Debug: AsyncBufRead + Unpin>(debug: &mut Debug) {
+    loop {
+        let mut line = String::new();
+        match debug.read_line(&mut line).await {
+            Err(e) => {
+                error!("Error reading stderr from server: {:?}", e);
+                break;
+            }
+            Ok(0) => {
+                warn!("stderr stream closed");
+                break;
+            }
+            _ => info!("[Server] {}", line.trim()),
+        }
+    }
+}
+
 async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     reader: &mut MessageReader<Reader>,
     writer: &mut MessageWriter<Writer>,
+    port_sender: mpsc::Sender<Vec<message::PortDesc>>,
 ) -> Result<()> {
     // Wait for the server's announcement.
     if let Message::Hello(major, minor, _) = reader.read().await? {
@@ -328,10 +348,7 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     // eprintln!("> Sending initial list command...");
     // writer.write(Message::Refresh).await?;
 
-    let (port_sender, mut port_receiver) = mpsc::channel(2);
     let connections = ConnectionTable::new();
-
-    let mut ui = tokio::spawn(async move { ui::run_ui(&mut port_receiver).await });
 
     // And now really get into it...
     let (msg_sender, mut msg_receiver) = mpsc::channel(32);
@@ -345,10 +362,6 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     let (mut done_writing, mut done_reading) = (false, false);
     while !(done_reading && done_writing) {
         tokio::select! {
-            _ = &mut ui => {
-                // UI said to quit.
-                break;
-            }
             result = async {
                 loop {
                     use tokio::time::{sleep, Duration};
@@ -411,33 +424,63 @@ async fn spawn_ssh(server: &str) -> Result<tokio::process::Child, std::io::Error
 
     cmd.stdout(std::process::Stdio::piped());
     cmd.stdin(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
     cmd.spawn()
 }
 
-pub async fn run_client(remote: &str) {
-    // TODO: Drive a reconnect loop
-    let mut child = spawn_ssh(remote).await.expect("failed to spawn");
+async fn client_connect_loop(remote: &str, port_sender: mpsc::Sender<Vec<message::PortDesc>>) {
+    loop {
+        let mut child = spawn_ssh(remote).await.expect("failed to spawn");
 
-    let writer = child
-        .stdin
-        .take()
-        .expect("child did not have a handle to stdin");
+        let mut stderr = BufReader::new(
+            child
+                .stderr
+                .take()
+                .expect("child did not have a handle to stderr"),
+        );
 
-    let mut reader = BufReader::new(
-        child
-            .stdout
+        let writer = child
+            .stdin
             .take()
-            .expect("child did not have a handle to stdout"),
-    );
+            .expect("child did not have a handle to stdin");
 
-    if let Err(e) = client_sync(&mut reader).await {
-        eprintln!("Error synchronizing: {:?}", e);
-        return;
+        let mut reader = BufReader::new(
+            child
+                .stdout
+                .take()
+                .expect("child did not have a handle to stdout"),
+        );
+
+        if let Err(e) = client_sync(&mut reader).await {
+            eprintln!("Error synchronizing: {:?}", e);
+            return;
+        }
+
+        let mut writer = MessageWriter::new(BufWriter::new(writer));
+        let mut reader = MessageReader::new(reader);
+
+        tokio::spawn(async move {
+            client_pipe_stderr(&mut stderr).await;
+        });
+
+        if let Err(e) = client_main(&mut reader, &mut writer, port_sender.clone()).await {
+            error!("Server disconnected with error: {:?}", e);
+        } else {
+            warn!("Disconnected from server, reconnecting...");
+        }
     }
+}
 
-    let mut writer = MessageWriter::new(BufWriter::new(writer));
-    let mut reader = MessageReader::new(reader);
-    if let Err(e) = client_main(&mut reader, &mut writer).await {
-        eprintln!("Error: {:?}", e);
+pub async fn run_client(remote: &str) {
+    let (log_sender, mut log_receiver) = mpsc::channel(1024);
+    _ = log::set_boxed_logger(ui::Logger::new(log_sender));
+    log::set_max_level(LevelFilter::Info);
+
+    let (port_sender, mut port_receiver) = mpsc::channel(2);
+
+    // Start the reconnect loop.
+    tokio::select! {
+        _ = ui::run_ui(&mut port_receiver, &mut log_receiver) => (),
+        _ = client_connect_loop(remote, port_sender) => ()
     }
 }

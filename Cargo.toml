@@ -12,6 +12,7 @@ crossterm = { version = "0.25", features = ["event-stream"] }
 thiserror = "1.0"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
+log = { version = "0.4", features = ["std"] }
 
 [target.'cfg(target_os="linux")'.dependencies]
 procfs = "0.14.1"

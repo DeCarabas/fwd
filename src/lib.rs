@@ -162,10 +162,7 @@ async fn server_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     }
 }
 
-async fn client_sync<Read: AsyncRead + Unpin, Write: AsyncWrite + Unpin>(
-    reader: &mut Read,
-    writer: &mut Write,
-) -> Result<(), tokio::io::Error> {
+async fn client_sync<Read: AsyncRead + Unpin>(reader: &mut Read) -> Result<(), tokio::io::Error> {
     // eprintln!("> Waiting for synchronization marker...");
 
     // Run these two loops in parallel; the copy of stdin should stop when
@@ -173,13 +170,6 @@ async fn client_sync<Read: AsyncRead + Unpin, Write: AsyncWrite + Unpin>(
     // reason then obviously we quit.
     let mut stdout = tokio::io::stdout();
     tokio::select! {
-        result = async {
-            let mut stdin = tokio::io::stdin();
-            tokio::io::copy(&mut stdin, writer).await
-        } => match result {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e),
-        },
         result = async {
             let mut seen = 0;
             while seen < 8 {
@@ -428,7 +418,7 @@ pub async fn run_client(remote: &str) {
     // TODO: Drive a reconnect loop
     let mut child = spawn_ssh(remote).await.expect("failed to spawn");
 
-    let mut writer = child
+    let writer = child
         .stdin
         .take()
         .expect("child did not have a handle to stdin");
@@ -440,7 +430,7 @@ pub async fn run_client(remote: &str) {
             .expect("child did not have a handle to stdout"),
     );
 
-    if let Err(e) = client_sync(&mut reader, &mut writer).await {
+    if let Err(e) = client_sync(&mut reader).await {
         eprintln!("Error synchronizing: {:?}", e);
         return;
     }

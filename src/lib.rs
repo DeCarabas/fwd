@@ -245,7 +245,7 @@ async fn client_read<T: AsyncRead + Unpin>(
     info!("> Processing packets...");
     loop {
         let message = reader.read().await?;
-        info!("> packet {:?}", message);
+        // info!("> packet {:?}", message); // TODO: Smaller
 
         use Message::*;
         match message {

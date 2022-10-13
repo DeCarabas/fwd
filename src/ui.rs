@@ -62,6 +62,7 @@ async fn run_ui_core(
     execute!(stdout, EnterAlternateScreen, DisableLineWrap)?;
     let mut events = EventStream::new();
 
+    let mut show_logs = false;
     let mut lines: VecDeque<String> = VecDeque::with_capacity(1024);
     let mut ports = None;
     loop {
@@ -72,6 +73,9 @@ async fn run_ui_core(
                         match ev {
                             KeyEvent {code:KeyCode::Esc, ..} => { break; },
                             KeyEvent {code:KeyCode::Char('q'), ..} => { break; },
+                            KeyEvent {code:KeyCode::Char('l'), ..} => {
+                                show_logs = !show_logs;
+                            }
                             _ => ()
                         }
                     },
@@ -103,6 +107,7 @@ async fn run_ui_core(
 
         queue!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
 
+        // List of open ports
         // How wide are all the things?
         let columns: usize = columns.into();
         let padding = 1;
@@ -123,7 +128,8 @@ async fn run_ui_core(
         );
         if let Some(ports) = &mut ports {
             ports.sort_by(|a, b| a.port.partial_cmp(&b.port).unwrap());
-            for port in ports.into_iter().take(((rows / 2) - 1).into()) {
+            let max_ports: usize = if show_logs { (rows / 2) - 1 } else { rows - 2 }.into();
+            for port in ports.into_iter().take(max_ports) {
                 print!(
                     " {:port_width$} {:url_width$} {:description_width$}\r\n",
                     port.port,
@@ -133,22 +139,26 @@ async fn run_ui_core(
             }
         }
 
-        let hr: usize = ((rows / 2) - 1).into();
-        let start: usize = if lines.len() > hr {
-            lines.len() - hr
-        } else {
-            0
-        };
+        // Log
+        if show_logs {
+            let hr: usize = ((rows / 2) - 2).into();
+            let start: usize = if lines.len() > hr {
+                lines.len() - hr
+            } else {
+                0
+            };
 
-        queue!(stdout, MoveTo(0, rows / 2))?;
-        for line in lines.range(start..) {
-            print!("{}\r\n", line);
+            queue!(stdout, MoveTo(0, rows / 2))?;
+            print!("{}", format!("{:columns$}", " Log").negative());
+            for line in lines.range(start..) {
+                print!("{}\r\n", line);
+            }
         }
 
         queue!(stdout, MoveTo(0, rows - 1))?;
         print!(
             "{}",
-            format!("{:columns$}", " Press ESC or q to quit").negative()
+            format!("{:columns$}", " Press ESC or q to quit  |  l - toggle log").negative()
         );
         stdout.flush()?;
     }

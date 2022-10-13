@@ -11,6 +11,7 @@ use crossterm::{
     },
 };
 use log::{Level, Metadata, Record};
+use open;
 use std::collections::vec_deque::VecDeque;
 use std::io::{stdout, Write};
 use tokio::sync::mpsc;
@@ -62,19 +63,41 @@ async fn run_ui_core(
     execute!(stdout, EnterAlternateScreen, DisableLineWrap)?;
     let mut events = EventStream::new();
 
+    let mut selection = 0;
     let mut show_logs = false;
     let mut lines: VecDeque<String> = VecDeque::with_capacity(1024);
-    let mut ports = None;
+    let mut ports: Option<Vec<PortDesc>> = None;
     loop {
         tokio::select! {
             ev = events.next() => {
                 match ev {
                     Some(Ok(Event::Key(ev))) => {
                         match ev {
-                            KeyEvent {code:KeyCode::Esc, ..} => { break; },
-                            KeyEvent {code:KeyCode::Char('q'), ..} => { break; },
+                            KeyEvent {code:KeyCode::Esc, ..}
+                            | KeyEvent {code:KeyCode::Char('q'), ..} => { break; },
                             KeyEvent {code:KeyCode::Char('l'), ..} => {
                                 show_logs = !show_logs;
+                            }
+                            KeyEvent { code:KeyCode::Up, ..}
+                            | KeyEvent { code:KeyCode::Char('j'), ..} => {
+                                if selection > 0 {
+                                    selection -= 1;
+                                }
+                            }
+                            KeyEvent { code:KeyCode::Down, ..}
+                            | KeyEvent { code:KeyCode::Char('k'), ..} => {
+                                if let Some(p) = &ports {
+                                    if selection != p.len() - 1 {
+                                        selection += 1;
+                                    }
+                                }
+                            }
+                            KeyEvent { code:KeyCode::Enter, ..} => {
+                                if let Some(p) = &ports {
+                                    if selection < p.len() {
+                                        _ = open::that(format!("http://127.0.0.1:{}/", p[selection].port));
+                                    }
+                                }
                             }
                             _ => ()
                         }
@@ -86,7 +109,10 @@ async fn run_ui_core(
             }
             pr = port_receiver.recv() => {
                 match pr {
-                    Some(p) => { ports = Some(p); }
+                    Some(mut p) => {
+                        p.sort_by(|a, b| a.port.partial_cmp(&b.port).unwrap());
+                        ports = Some(p);
+                    }
                     None => break,
                 }
             }
@@ -112,28 +138,25 @@ async fn run_ui_core(
         let columns: usize = columns.into();
         let padding = 1;
         let port_width = 5; // 5 characters for 16-bit number
-        let url_width = "http://127.0.0.1:/".len() + port_width;
 
-        let description_width = columns - (padding + port_width + padding + url_width + padding);
+        let description_width = columns - (padding + padding + port_width + padding);
 
         print!(
             "{}",
             format!(
-                " {port:>port_width$} {url:<url_width$} {description:<description_width$}\r\n",
+                "  {port:>port_width$} {description:<description_width$}\r\n",
                 port = "port",
-                url = "url",
                 description = "description"
             )
             .negative()
         );
         if let Some(ports) = &mut ports {
-            ports.sort_by(|a, b| a.port.partial_cmp(&b.port).unwrap());
             let max_ports: usize = if show_logs { (rows / 2) - 1 } else { rows - 2 }.into();
-            for port in ports.into_iter().take(max_ports) {
+            for (index, port) in ports.into_iter().take(max_ports).enumerate() {
                 print!(
-                    " {:port_width$} {:url_width$} {:description_width$}\r\n",
+                    "{} {:port_width$} {:description_width$}\r\n",
+                    if index == selection { "\u{2B46}" } else { " " },
                     port.port,
-                    format!("http://127.0.0.1:{}/", port.port),
                     port.desc
                 );
             }
@@ -158,7 +181,11 @@ async fn run_ui_core(
         queue!(stdout, MoveTo(0, rows - 1))?;
         print!(
             "{}",
-            format!("{:columns$}", " Press ESC or q to quit  |  l - toggle log").negative()
+            format!(
+                "{:columns$}",
+                " q - quit  |  l - toggle log  |  \u{2191}/\u{2193} - select port  | <enter> - browse"
+            )
+            .negative()
         );
         stdout.flush()?;
     }

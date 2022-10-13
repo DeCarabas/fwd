@@ -10,7 +10,7 @@ use crossterm::{
         EnterAlternateScreen, LeaveAlternateScreen,
     },
 };
-use log::{Level, LevelFilter, Metadata, Record};
+use log::{Level, Metadata, Record};
 use std::collections::vec_deque::VecDeque;
 use std::io::{stdout, Write};
 use tokio::sync::mpsc;

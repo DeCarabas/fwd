@@ -211,7 +211,7 @@ impl<T: AsyncWrite + Unpin> MessageWriter<T> {
         self.writer
             .write_u32(buffer.len().try_into().expect("Message too large"))
             .await?;
-        self.writer.write_buf(&mut buffer).await?;
+        self.writer.write_all(&mut buffer).await?;
         self.writer.flush().await?;
         Ok(())
     }
@@ -227,8 +227,8 @@ impl<T: AsyncRead + Unpin> MessageReader<T> {
     }
     pub async fn read(self: &mut Self) -> Result<Message> {
         let frame_length = self.reader.read_u32().await?;
-        let mut data = BytesMut::with_capacity(frame_length.try_into().unwrap());
-        self.reader.read_buf(&mut data).await?;
+        let mut data = vec![0; frame_length.try_into().unwrap()];
+        self.reader.read_exact(&mut data).await?;
 
         let mut cursor = Cursor::new(&data[..]);
         Message::decode(&mut cursor)
@@ -297,6 +297,7 @@ mod message_tests {
             },
         ]));
         assert_round_trip(Data(0x1234567890123456, vec![1, 2, 3, 4].into()));
+        assert_round_trip(Data(0x123, vec![0; u16::max_value().into()].into()));
     }
 
     #[test]

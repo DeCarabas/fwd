@@ -4,7 +4,7 @@ use crossterm::{
     cursor::MoveTo,
     event::{Event, EventStream, KeyCode, KeyEvent},
     execute, queue,
-    style::Stylize,
+    style::{Color, PrintStyledContent, Stylize},
     terminal::{
         disable_raw_mode, enable_raw_mode, size, Clear, ClearType, DisableLineWrap, EnableLineWrap,
         EnterAlternateScreen, LeaveAlternateScreen,
@@ -17,13 +17,21 @@ use std::io::{stdout, Write};
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
+pub enum UIEvent {
+    Connected,
+    Disconnected,
+    ServerLine(String),
+    LogLine(log::Level, String),
+    Ports(Vec<PortDesc>),
+}
+
 #[derive(Debug, Clone)]
 pub struct Logger {
-    line_sender: mpsc::Sender<String>,
+    line_sender: mpsc::Sender<UIEvent>,
 }
 
 impl Logger {
-    pub fn new(line_sender: mpsc::Sender<String>) -> Box<Logger> {
+    pub fn new(line_sender: mpsc::Sender<UIEvent>) -> Box<Logger> {
         Box::new(Logger { line_sender })
     }
 }
@@ -35,41 +43,38 @@ impl log::Log for Logger {
 
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
-            let line = format!("{} - {}", record.level(), record.args());
-            _ = self.line_sender.try_send(line);
+            let line = format!("{}", record.args());
+            _ = self
+                .line_sender
+                .try_send(UIEvent::LogLine(record.level(), line));
         }
     }
 
     fn flush(&self) {}
 }
 
-pub async fn run_ui(
-    port_receiver: &mut mpsc::Receiver<Vec<PortDesc>>,
-    log_receiver: &mut mpsc::Receiver<String>,
-) -> Result<()> {
+pub async fn run_ui(events: &mut mpsc::Receiver<UIEvent>) -> Result<()> {
     enable_raw_mode()?;
-    let result = run_ui_core(port_receiver, log_receiver).await;
+    let result = run_ui_core(events).await;
     execute!(stdout(), EnableLineWrap, LeaveAlternateScreen)?;
     disable_raw_mode()?;
     result
 }
 
-async fn run_ui_core(
-    port_receiver: &mut mpsc::Receiver<Vec<PortDesc>>,
-    log: &mut mpsc::Receiver<String>,
-) -> Result<()> {
+async fn run_ui_core(events: &mut mpsc::Receiver<UIEvent>) -> Result<()> {
     let mut stdout = stdout();
 
     execute!(stdout, EnterAlternateScreen, DisableLineWrap)?;
-    let mut events = EventStream::new();
+    let mut console_events = EventStream::new();
 
+    let mut connected = false;
     let mut selection = 0;
     let mut show_logs = false;
     let mut lines: VecDeque<String> = VecDeque::with_capacity(1024);
     let mut ports: Option<Vec<PortDesc>> = None;
     loop {
         tokio::select! {
-            ev = events.next() => {
+            ev = console_events.next() => {
                 match ev {
                     Some(Ok(Event::Key(ev))) => {
                         match ev {
@@ -107,59 +112,76 @@ async fn run_ui_core(
                     None => (),         // ....no events? what?
                 }
             }
-            pr = port_receiver.recv() => {
-                match pr {
-                    Some(mut p) => {
+            ev = events.recv() => {
+                match ev {
+                    Some(UIEvent::Disconnected) => {
+                        connected = false;
+                    }
+                    Some(UIEvent::Connected) => {
+                        connected = true;
+                    }
+                    Some(UIEvent::Ports(mut p)) => {
                         p.sort_by(|a, b| a.port.partial_cmp(&b.port).unwrap());
                         ports = Some(p);
                     }
-                    None => break,
-                }
-            }
-            l = log.recv() => {
-                match l {
-                    Some(line) => {
-                        if lines.len() > 1024 {
+                    Some(UIEvent::ServerLine(line)) => {
+                        while lines.len() >= 1024 {
                             lines.pop_front();
                         }
-                        lines.push_back(line);
-                    },
+                        lines.push_back(format!("[SERVER] {line}"));
+                    }
+                    Some(UIEvent::LogLine(_level, line)) => {
+                        while lines.len() >= 1024 {
+                            lines.pop_front();
+                        }
+                        lines.push_back(format!("[CLIENT] {line}"));
+                    }
                     None => break,
                 }
             }
         }
 
         let (columns, rows) = size()?;
+        let columns: usize = columns.into();
 
         queue!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
+        if connected {
+            // List of open ports
+            // How wide are all the things?
+            let padding = 1;
+            let port_width = 5; // 5 characters for 16-bit number
 
-        // List of open ports
-        // How wide are all the things?
-        let columns: usize = columns.into();
-        let padding = 1;
-        let port_width = 5; // 5 characters for 16-bit number
+            let description_width = columns - (padding + padding + port_width + padding);
 
-        let description_width = columns - (padding + padding + port_width + padding);
-
-        print!(
-            "{}",
-            format!(
-                "  {port:>port_width$} {description:<description_width$}\r\n",
-                port = "port",
-                description = "description"
-            )
-            .negative()
-        );
-        if let Some(ports) = &mut ports {
-            let max_ports: usize = if show_logs { (rows / 2) - 1 } else { rows - 2 }.into();
-            for (index, port) in ports.into_iter().take(max_ports).enumerate() {
-                print!(
-                    "{} {:port_width$} {:description_width$}\r\n",
-                    if index == selection { "\u{2B46}" } else { " " },
-                    port.port,
-                    port.desc
-                );
+            print!(
+                "{}",
+                format!(
+                    "  {port:>port_width$} {description:<description_width$}\r\n",
+                    port = "port",
+                    description = "description"
+                )
+                .negative()
+            );
+            if let Some(ports) = &mut ports {
+                let max_ports: usize = if show_logs { (rows / 2) - 1 } else { rows - 2 }.into();
+                for (index, port) in ports.into_iter().take(max_ports).enumerate() {
+                    print!(
+                        "{} {:port_width$} {:description_width$}\r\n",
+                        if index == selection { "\u{2B46}" } else { " " },
+                        port.port,
+                        port.desc
+                    );
+                }
             }
+        } else {
+            queue!(
+                stdout,
+                PrintStyledContent(
+                    format!("{:^columns$}", "Not Connected")
+                        .with(Color::Black)
+                        .on(Color::Red)
+                )
+            )?;
         }
 
         // Log

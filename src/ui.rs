@@ -2,13 +2,14 @@ use crate::client_listen;
 use crate::message::PortDesc;
 use anyhow::Result;
 use crossterm::{
-    cursor::MoveTo,
-    event::{Event, EventStream, KeyCode, KeyEvent},
+    cursor::{MoveTo, RestorePosition, SavePosition},
+    event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
     execute, queue,
     style::{Color, PrintStyledContent, Stylize},
     terminal::{
-        disable_raw_mode, enable_raw_mode, size, Clear, ClearType, DisableLineWrap, EnableLineWrap,
-        EnterAlternateScreen, LeaveAlternateScreen,
+        disable_raw_mode, enable_raw_mode, size, Clear, ClearType,
+        DisableLineWrap, EnableLineWrap, EnterAlternateScreen,
+        LeaveAlternateScreen,
     },
 };
 use log::{error, info, Level, Metadata, Record};
@@ -56,10 +57,17 @@ impl log::Log for Logger {
     fn flush(&self) {}
 }
 
+#[derive(Debug)]
 pub struct UI {
     events: mpsc::Receiver<UIEvent>,
     listeners: HashMap<u16, oneshot::Sender<()>>,
     socks_port: u16,
+    running: bool,
+    show_logs: bool,
+    selection: usize,
+    ports: Option<Vec<PortDesc>>,
+    lines: VecDeque<String>,
+    alternate_screen: bool,
 }
 
 impl UI {
@@ -68,162 +76,107 @@ impl UI {
             events,
             listeners: HashMap::new(),
             socks_port: 0,
+            running: true,
+            show_logs: false,
+            selection: 0,
+            ports: None,
+            lines: VecDeque::with_capacity(1024),
+            alternate_screen: false,
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        enable_raw_mode()?;
         let result = self.run_core().await;
-        execute!(stdout(), EnableLineWrap, LeaveAlternateScreen)?;
-        disable_raw_mode()?;
+        _ = self.leave_alternate_screen();
         result
     }
 
     async fn run_core(&mut self) -> Result<()> {
-        let mut stdout = stdout();
-
-        execute!(stdout, EnterAlternateScreen, DisableLineWrap)?;
         let mut console_events = EventStream::new();
 
-        let mut connected = false;
-        let mut selection = 0;
-        let mut show_logs = false;
-        let mut lines: VecDeque<String> = VecDeque::with_capacity(1024);
-        let mut ports: Option<Vec<PortDesc>> = None;
-        loop {
-            tokio::select! {
-                ev = console_events.next() => {
-                    match ev {
-                        Some(Ok(Event::Key(ev))) => {
-                            match ev {
-                                KeyEvent {code:KeyCode::Esc, ..}
-                                | KeyEvent {code:KeyCode::Char('q'), ..} => { break; },
-                                KeyEvent {code:KeyCode::Char('l'), ..} => {
-                                    show_logs = !show_logs;
-                                }
-                                KeyEvent {code:KeyCode::Char('e'), ..} => {
-                                    if let Some(ports) = &ports {
-                                        if selection < ports.len() {
-                                            let p = ports[selection].port;
-                                            self.enable_disable_port(p);
-                                        }
-                                    }
-                                }
-                                KeyEvent { code:KeyCode::Up, ..}
-                                | KeyEvent { code:KeyCode::Char('j'), ..} => {
-                                    if selection > 0 {
-                                        selection -= 1;
-                                    }
-                                }
-                                KeyEvent { code:KeyCode::Down, ..}
-                                | KeyEvent { code:KeyCode::Char('k'), ..} => {
-                                    if let Some(p) = &ports {
-                                        if selection != p.len() - 1 {
-                                            selection += 1;
-                                        }
-                                    }
-                                }
-                                KeyEvent { code:KeyCode::Enter, ..} => {
-                                    if let Some(p) = &ports {
-                                        if selection < p.len() {
-                                            _ = open::that(format!("http://127.0.0.1:{}/", p[selection].port));
-                                        }
-                                    }
-                                }
-                                _ => ()
-                            }
-                        },
-                        Some(Ok(_)) => (),  // Don't care about this event...
-                        Some(Err(_)) => (), // Hmmmmmm.....?
-                        None => (),         // ....no events? what?
-                    }
-                }
-                ev = self.events.recv() => {
-                    match ev {
-                        Some(UIEvent::Disconnected) => {
-                            self.socks_port = 0;
-                            connected = false;
-                        }
-                        Some(UIEvent::Connected(sp)) => {
-                            self.socks_port = sp;
-                            info!("Socks port {socks_port}", socks_port=self.socks_port);
-                            connected = true;
-                        }
-                        Some(UIEvent::Ports(mut p)) => {
-                            p.sort_by(|a, b| a.port.partial_cmp(&b.port).unwrap());
-                            if selection >= p.len() {
-                                selection = p.len()-1;
-                            }
+        self.running = true;
+        while self.running {
+            self.handle_events(&mut console_events).await;
 
-                            let mut new_listeners = HashMap::new();
-                            for port in &p {
-                                let port = port.port;
-                                if let Some(l) = self.listeners.remove(&port) {
-                                    if !l.is_closed() {
-                                        // `l` here is, of course, the channel that we
-                                        // use to tell the listener task to stop (see the
-                                        // spawn call below). If it isn't closed then
-                                        // that means a spawn task is still running so we
-                                        // should just let it keep running and re-use the
-                                        // existing listener.
-                                        new_listeners.insert(port, l);
-                                    }
-                                }
-                            }
-
-                            // This has the side effect of closing any
-                            // listener that didn't get copied over to the
-                            // new listeners table.
-                            self.listeners = new_listeners;
-                            ports = Some(p);
-                        }
-                        Some(UIEvent::ServerLine(line)) => {
-                            while lines.len() >= 1024 {
-                                lines.pop_front();
-                            }
-                            lines.push_back(format!("[SERVER] {line}"));
-                        }
-                        Some(UIEvent::LogLine(_level, line)) => {
-                            while lines.len() >= 1024 {
-                                lines.pop_front();
-                            }
-                            lines.push_back(format!("[CLIENT] {line}"));
-                        }
-                        None => break,
-                    }
-                }
+            if self.connected() {
+                self.render_connected()?;
+            } else {
+                self.render_disconnected()?;
             }
+        }
 
-            let (columns, rows) = size()?;
-            let columns: usize = columns.into();
+        Ok(())
+    }
 
-            queue!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
-            if connected {
-                // List of open ports
-                // How wide are all the things?
-                let padding = 1;
-                let enabled_width = 1; // Just 1 character
-                let port_width = 5; // 5 characters for 16-bit number
+    fn render_disconnected(&mut self) -> Result<()> {
+        self.leave_alternate_screen()?;
+        let mut stdout = stdout();
 
-                let description_width =
-                    columns - (padding + padding + enabled_width + padding + port_width + padding);
+        let (columns, _) = size()?;
+        let columns: usize = columns.into();
 
+        execute!(
+            stdout,
+            SavePosition,
+            MoveTo(0, 0),
+            PrintStyledContent(
+                format!("{:^columns$}", "Not Connected")
+                    .with(Color::Black)
+                    .on(Color::Red)
+            ),
+            RestorePosition,
+        )?;
+        Ok(())
+    }
+
+    fn render_connected(&mut self) -> Result<()> {
+        self.enter_alternate_screen()?;
+        let mut stdout = stdout();
+
+        let (columns, rows) = size()?;
+        let columns: usize = columns.into();
+
+        queue!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
+
+        // List of open ports
+        // How wide are all the things?
+        let padding = 1;
+        let enabled_width = 1; // Just 1 character
+        let port_width = 5; // 5 characters for 16-bit number
+
+        let description_width = columns
+            - (padding
+                + padding
+                + enabled_width
+                + padding
+                + port_width
+                + padding);
+
+        print!(
+            "{}",
+            format!(
+                "  {enabled:>enabled_width$} {port:>port_width$} {description:<description_width$}\r\n",
+                enabled = "E",
+                port = "port",
+                description = "description"
+            )
+                .negative()
+        );
+        if let Some(ports) = &self.ports {
+            let max_ports: usize = if self.show_logs {
+                (rows / 2) - 1
+            } else {
+                rows - 2
+            }
+            .into();
+            for (index, port) in ports.into_iter().take(max_ports).enumerate() {
                 print!(
-                    "{}",
-                    format!(
-                        "  {enabled:>enabled_width$} {port:>port_width$} {description:<description_width$}\r\n",
-                        enabled = "E",
-                        port = "port",
-                        description = "description"
-                    )
-                    .negative()
-                );
-                if let Some(ports) = &mut ports {
-                    let max_ports: usize = if show_logs { (rows / 2) - 1 } else { rows - 2 }.into();
-                    for (index, port) in ports.into_iter().take(max_ports).enumerate() {
-                        print!(
                             "{} {:>enabled_width$} {:port_width$} {:description_width$}\r\n",
-                            if index == selection { "\u{2B46}" } else { " " },
+                            if index == self.selection {
+                                "\u{2B46}"
+                            } else {
+                                " "
+                            },
                             if self.listeners.contains_key(&port.port) {
                                 "+"
                             } else {
@@ -232,47 +185,48 @@ impl UI {
                             port.port,
                             port.desc
                         );
-                    }
-                }
-            } else {
-                queue!(
-                    stdout,
-                    PrintStyledContent(
-                        format!("{:^columns$}", "Not Connected")
-                            .with(Color::Black)
-                            .on(Color::Red)
-                    )
-                )?;
             }
-
-            // Log
-            if show_logs {
-                let hr: usize = ((rows / 2) - 2).into();
-                let start: usize = if lines.len() > hr {
-                    lines.len() - hr
-                } else {
-                    0
-                };
-
-                queue!(stdout, MoveTo(0, rows / 2))?;
-                print!("{}", format!("{:columns$}", " Log").negative());
-                for line in lines.range(start..) {
-                    print!("{}\r\n", line);
-                }
-            }
-
-            queue!(stdout, MoveTo(0, rows - 1))?;
-            print!(
-                "{}",
-                format!(
-                    "{:columns$}",
-                    " q - quit  |  l - toggle log  |  \u{2191}/\u{2193} - select port  | e - enable/disable | <enter> - browse"
-                ).negative()
-            );
-            stdout.flush()?;
         }
 
+        // Log
+        if self.show_logs {
+            let hr: usize = ((rows / 2) - 2).into();
+            let start: usize = if self.lines.len() > hr {
+                self.lines.len() - hr
+            } else {
+                0
+            };
+
+            queue!(stdout, MoveTo(0, rows / 2))?;
+            print!("{}", format!("{:columns$}", " Log").negative());
+            for line in self.lines.range(start..) {
+                print!("{}\r\n", line);
+            }
+        }
+
+        queue!(stdout, MoveTo(0, rows - 1))?;
+        print!(
+            "{}",
+            format!(
+                "{:columns$}",
+                " q - quit  |  l - toggle log  |  \u{2191}/\u{2193} - select port  | e - enable/disable | <enter> - browse"
+            ).negative()
+        );
+        stdout.flush()?;
         Ok(())
+    }
+
+    fn connected(&self) -> bool {
+        self.socks_port != 0
+    }
+
+    fn get_selected_port(&self) -> Option<&PortDesc> {
+        if let Some(p) = &self.ports {
+            if self.selection < p.len() {
+                return Some(&p[self.selection]);
+            }
+        }
+        None
     }
 
     fn enable_disable_port(&mut self, port: u16) {
@@ -297,6 +251,136 @@ impl UI {
                     info!("Stopped listening on port {port}");
                 }
             });
+        }
+    }
+
+    fn enter_alternate_screen(&mut self) -> Result<()> {
+        if !self.alternate_screen {
+            enable_raw_mode()?;
+            execute!(stdout(), EnterAlternateScreen, DisableLineWrap)?;
+            self.alternate_screen = true;
+        }
+        Ok(())
+    }
+
+    fn leave_alternate_screen(&mut self) -> Result<()> {
+        if self.alternate_screen {
+            execute!(stdout(), LeaveAlternateScreen, EnableLineWrap)?;
+            disable_raw_mode()?;
+            self.alternate_screen = false;
+        }
+        Ok(())
+    }
+
+    async fn handle_events(&mut self, console_events: &mut EventStream) {
+        tokio::select! {
+            ev = console_events.next() => self.handle_console_event(ev),
+            ev = self.events.recv() => self.handle_internal_event(ev),
+        }
+    }
+
+    fn handle_console_event(
+        &mut self,
+        ev: Option<Result<Event, std::io::Error>>,
+    ) {
+        match ev {
+            Some(Ok(Event::Key(ev))) => match ev {
+                KeyEvent { code: KeyCode::Char('c'), .. } => {
+                    if ev.modifiers.intersects(KeyModifiers::CONTROL) {
+                        self.running = false;
+                    }
+                }
+                KeyEvent { code: KeyCode::Esc, .. }
+                | KeyEvent { code: KeyCode::Char('q'), .. } => {
+                    self.running = false;
+                }
+                KeyEvent { code: KeyCode::Char('l'), .. } => {
+                    self.show_logs = !self.show_logs;
+                }
+                KeyEvent { code: KeyCode::Char('e'), .. } => {
+                    if let Some(p) = self.get_selected_port() {
+                        self.enable_disable_port(p.port);
+                    }
+                }
+                KeyEvent { code: KeyCode::Up, .. }
+                | KeyEvent { code: KeyCode::Char('j'), .. } => {
+                    if self.selection > 0 {
+                        self.selection -= 1;
+                    }
+                }
+                KeyEvent { code: KeyCode::Down, .. }
+                | KeyEvent { code: KeyCode::Char('k'), .. } => {
+                    if let Some(p) = &self.ports {
+                        if self.selection != p.len() - 1 {
+                            self.selection += 1;
+                        }
+                    }
+                }
+                KeyEvent { code: KeyCode::Enter, .. } => {
+                    if let Some(p) = self.get_selected_port() {
+                        _ = open::that(format!("http://127.0.0.1:{}/", p.port));
+                    }
+                }
+                _ => (),
+            },
+            Some(Ok(_)) => (), // Don't care about this event...
+            Some(Err(_)) => (), // Hmmmmmm.....?
+            None => (),        // ....no events? what?
+        }
+    }
+
+    fn handle_internal_event(&mut self, event: Option<UIEvent>) {
+        match event {
+            Some(UIEvent::Disconnected) => {
+                self.socks_port = 0;
+            }
+            Some(UIEvent::Connected(sp)) => {
+                self.socks_port = sp;
+                info!("Socks port {socks_port}", socks_port = self.socks_port);
+            }
+            Some(UIEvent::Ports(mut p)) => {
+                p.sort_by(|a, b| a.port.partial_cmp(&b.port).unwrap());
+                if self.selection >= p.len() {
+                    self.selection = p.len() - 1;
+                }
+
+                let mut new_listeners = HashMap::new();
+                for port in &p {
+                    let port = port.port;
+                    if let Some(l) = self.listeners.remove(&port) {
+                        if !l.is_closed() {
+                            // `l` here is, of course, the channel that we
+                            // use to tell the listener task to stop (see the
+                            // spawn call below). If it isn't closed then
+                            // that means a spawn task is still running so we
+                            // should just let it keep running and re-use the
+                            // existing listener.
+                            new_listeners.insert(port, l);
+                        }
+                    }
+                }
+
+                // This has the side effect of closing any
+                // listener that didn't get copied over to the
+                // new listeners table.
+                self.listeners = new_listeners;
+                self.ports = Some(p);
+            }
+            Some(UIEvent::ServerLine(line)) => {
+                while self.lines.len() >= 1024 {
+                    self.lines.pop_front();
+                }
+                self.lines.push_back(format!("[SERVER] {line}"));
+            }
+            Some(UIEvent::LogLine(_level, line)) => {
+                while self.lines.len() >= 1024 {
+                    self.lines.pop_front();
+                }
+                self.lines.push_back(format!("[CLIENT] {line}"));
+            }
+            None => {
+                self.running = false;
+            }
         }
     }
 }

@@ -4,8 +4,8 @@ use log::{debug, error, info, warn};
 use message::{Message, MessageReader, MessageWriter};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::io::{
-    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
-    BufWriter,
+    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite,
+    AsyncWriteExt, BufReader, BufWriter,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process;
@@ -119,7 +119,9 @@ async fn server_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     }
 }
 
-async fn client_sync<Read: AsyncRead + Unpin>(reader: &mut Read) -> Result<(), tokio::io::Error> {
+async fn client_sync<Read: AsyncRead + Unpin>(
+    reader: &mut Read,
+) -> Result<(), tokio::io::Error> {
     info!("Waiting for synchronization marker...");
 
     // Run these two loops in parallel; the copy of stdin should stop when
@@ -149,7 +151,11 @@ async fn client_sync<Read: AsyncRead + Unpin>(reader: &mut Read) -> Result<(), t
 /// This contains a very simplified implementation of a SOCKS5 connector,
 /// enough to work with the SSH I have. I would have liked it to be SOCKS4,
 /// which is a much simpler protocol, but somehow it didn't work.
-async fn client_handle_connection(socks_port: u16, port: u16, socket: TcpStream) -> Result<()> {
+async fn client_handle_connection(
+    socks_port: u16,
+    port: u16,
+    socket: TcpStream,
+) -> Result<()> {
     debug!("Handling connection!");
 
     let dest_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, socks_port);
@@ -257,14 +263,18 @@ async fn client_handle_connection(socks_port: u16, port: u16, socket: TcpStream)
 
 async fn client_listen(port: u16, socks_port: u16) -> Result<()> {
     loop {
-        let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await?;
+        let listener =
+            TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
+                .await?;
         loop {
             // The second item contains the IP and port of the new
             // connection, but we don't care.
             let (socket, _) = listener.accept().await?;
 
             tokio::spawn(async move {
-                if let Err(e) = client_handle_connection(socks_port, port, socket).await {
+                if let Err(e) =
+                    client_handle_connection(socks_port, port, socket).await
+                {
                     error!("Error handling connection: {:?}", e);
                 } else {
                     debug!("Done???");
@@ -402,7 +412,9 @@ pub async fn run_server() {
     }
 }
 
-async fn spawn_ssh(server: &str) -> Result<(tokio::process::Child, u16), std::io::Error> {
+async fn spawn_ssh(
+    server: &str,
+) -> Result<(tokio::process::Child, u16), std::io::Error> {
     let socks_port = {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         listener.local_addr()?.port()
@@ -423,11 +435,30 @@ async fn spawn_ssh(server: &str) -> Result<(tokio::process::Child, u16), std::io
     Ok((child, socks_port))
 }
 
+#[cfg(target_family = "windows")]
+fn is_sigint(status: std::process::ExitStatus) -> bool {
+    match status.code() {
+        Some(255) => true,
+        _ => false,
+    }
+}
+
+#[cfg(target_family = "unix")]
+fn is_sigint(status: std::process::ExitStatus) -> bool {
+    use std::os::unix::process::ExitStatusExt;
+    match status.signal() {
+        Some(2) => true,
+        Some(_) => false,
+        None => false,
+    }
+}
+
 async fn client_connect_loop(remote: &str, events: mpsc::Sender<ui::UIEvent>) {
     loop {
         _ = events.send(ui::UIEvent::Disconnected).await;
 
-        let (mut child, socks_port) = spawn_ssh(remote).await.expect("failed to spawn");
+        let (mut child, socks_port) =
+            spawn_ssh(remote).await.expect("failed to spawn");
 
         let mut stderr = BufReader::new(
             child
@@ -450,6 +481,20 @@ async fn client_connect_loop(remote: &str, events: mpsc::Sender<ui::UIEvent>) {
 
         if let Err(e) = client_sync(&mut reader).await {
             error!("Error synchronizing: {:?}", e);
+            match child.wait().await {
+                Ok(status) => {
+                    if is_sigint(status) {
+                        return;
+                    } else {
+                        match status.code() {
+                            Some(127) => eprintln!("Cannot find `fwd` remotely, make sure it is installed"),
+                            _ => (),
+                        };
+                    }
+                }
+                Err(_) => (),
+            };
+
             tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
             continue;
         }
@@ -462,7 +507,10 @@ async fn client_connect_loop(remote: &str, events: mpsc::Sender<ui::UIEvent>) {
             client_pipe_stderr(&mut stderr, sec).await;
         });
 
-        if let Err(e) = client_main(socks_port, &mut reader, &mut writer, events.clone()).await {
+        if let Err(e) =
+            client_main(socks_port, &mut reader, &mut writer, events.clone())
+                .await
+        {
             error!("Server disconnected with error: {:?}", e);
         } else {
             warn!("Disconnected from server, reconnecting...");

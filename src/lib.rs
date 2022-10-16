@@ -191,9 +191,9 @@ async fn client_handle_connection(
         0x01,                                       // connect
         0x00,                                       // reserved!
         0x01,                                       // ipv4
-        127,                                        // lo
-        0,                                          // ..ca..
-        0,                                          // ..lho..
+        127,                                        // lo..
+        0,                                          // ..cal..
+        0,                                          // ..ho..
         1,                                          // ..st
         ((port & 0xFF00) >> 8).try_into().unwrap(), // port (high)
         ((port & 0x00FF) >> 0).try_into().unwrap(), // port (low)
@@ -210,7 +210,8 @@ async fn client_handle_connection(
         bail!("SOCKS5 reports a connect error {}", response[1]);
     }
     // Now we 100% do not care about the following information but we must
-    // discard it so we can get to the good stuff. response[3] is the type of address...
+    // discard it so we can get to the good stuff. response[3] is the type of
+    // address...
     if response[3] == 0x01 {
         // IPv4 - 4 bytes.
         let mut response: [u8; 4] = [0; 4];
@@ -231,7 +232,8 @@ async fn client_handle_connection(
             response[3]
         );
     }
-    // Finally the port number. Again, garbage, but it's in the packet we need to skip.
+    // Finally the port number. Again, garbage, but it's in the packet we
+    // need to skip.
     let mut response: [u8; 2] = [0; 2];
     dest_socket.read_exact(&mut response).await?;
 
@@ -345,10 +347,9 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     }
 
     // And now really get into it...
-    let (msg_sender, mut msg_receiver) = mpsc::channel(32);
-
     _ = events.send(ui::UIEvent::Connected(socks_port)).await;
 
+    let (msg_sender, mut msg_receiver) = mpsc::channel(32);
     let writing = pump_write(&mut msg_receiver, writer);
     let reading = client_handle_messages(reader, events);
     tokio::pin!(reading);

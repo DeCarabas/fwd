@@ -340,7 +340,7 @@ impl UI {
             }
             Some(UIEvent::Ports(mut p)) => {
                 p.sort_by(|a, b| a.port.partial_cmp(&b.port).unwrap());
-                if self.selection >= p.len() {
+                if self.selection >= p.len() && p.len() > 0 {
                     self.selection = p.len() - 1;
                 }
 

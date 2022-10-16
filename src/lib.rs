@@ -124,9 +124,6 @@ async fn client_sync<Read: AsyncRead + Unpin>(
 ) -> Result<(), tokio::io::Error> {
     info!("Waiting for synchronization marker...");
 
-    // Run these two loops in parallel; the copy of stdin should stop when
-    // we've seen the marker from the client. If the pipe closes for whatever
-    // reason then obviously we quit.
     let mut stdout = tokio::io::stdout();
     tokio::select! {
         result = async {

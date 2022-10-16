@@ -1,7 +1,6 @@
 use anyhow::{bail, Result};
-use connection::ConnectionTable;
 use log::LevelFilter;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use message::{Message, MessageReader, MessageWriter};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::io::{
@@ -11,9 +10,7 @@ use tokio::io::{
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 
-mod connection;
 mod message;
 mod refresh;
 mod ui;
@@ -51,29 +48,9 @@ async fn pump_write<T: AsyncWrite + Unpin>(
 // ----------------------------------------------------------------------------
 // Server
 
-async fn server_handle_connection(
-    channel: u64,
-    port: u16,
-    writer: mpsc::Sender<Message>,
-    connections: ConnectionTable,
-) {
-    let mut connections = connections;
-    if let Ok(mut stream) = TcpStream::connect(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await {
-        let (send_data, mut data) = mpsc::channel(32);
-        connections.add(channel, send_data);
-        if let Ok(_) = writer.send(Message::Connected(channel)).await {
-            let mut writer = writer.clone();
-            connection::process(channel, &mut stream, &mut data, &mut writer).await;
-
-            info!("< Done server!");
-        }
-    }
-}
-
 async fn server_read<T: AsyncRead + Unpin>(
     reader: &mut MessageReader<T>,
     writer: mpsc::Sender<Message>,
-    connections: ConnectionTable,
 ) -> Result<()> {
     // info!("< Processing packets...");
     loop {
@@ -82,28 +59,6 @@ async fn server_read<T: AsyncRead + Unpin>(
         use Message::*;
         match message {
             Ping => (),
-            Connect(channel, port) => {
-                let (writer, connections) = (writer.clone(), connections.clone());
-                tokio::spawn(async move {
-                    server_handle_connection(channel, port, writer, connections).await;
-                });
-            }
-            Close(channel) => {
-                let mut connections = connections.clone();
-                tokio::spawn(async move {
-                    // Once we get a close the connection becomes  unreachable.
-                    //
-                    // NOTE: If all goes well the 'data' channel gets dropped
-                    // here, and we close the write half of the socket.
-                    connections.remove(channel);
-                });
-            }
-            Data(channel, buf) => {
-                let connections = connections.clone();
-                tokio::spawn(async move {
-                    connections.receive(channel, buf).await;
-                });
-            }
             Refresh => {
                 let writer = writer.clone();
                 tokio::spawn(async move {
@@ -129,15 +84,13 @@ async fn server_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     reader: &mut MessageReader<Reader>,
     writer: &mut MessageWriter<Writer>,
 ) -> Result<()> {
-    let connections = ConnectionTable::new();
-
     // The first message we send must be an announcement.
     writer.write(Message::Hello(0, 1, vec![])).await?;
 
     // Jump into it...
     let (msg_sender, mut msg_receiver) = mpsc::channel(32);
     let writing = pump_write(&mut msg_receiver, writer);
-    let reading = server_read(reader, msg_sender, connections);
+    let reading = server_read(reader, msg_sender);
     tokio::pin!(reading);
     tokio::pin!(writing);
 
@@ -190,42 +143,132 @@ async fn client_sync<Read: AsyncRead + Unpin>(reader: &mut Read) -> Result<(), t
     }
 }
 
-async fn client_handle_connection(
-    port: u16,
-    writer: mpsc::Sender<Message>,
-    connections: ConnectionTable,
-    socket: &mut TcpStream,
-) {
-    let mut connections = connections;
-    let (send_connected, connected) = oneshot::channel();
-    let (send_data, mut data) = mpsc::channel(32);
-    let channel = connections.alloc(send_connected, send_data);
+/// Handle an incoming client connection, by forwarding it to the SOCKS5
+/// server at the specified port.
+///
+/// This contains a very simplified implementation of a SOCKS5 connector,
+/// enough to work with the SSH I have. I would have liked it to be SOCKS4,
+/// which is a much simpler protocol, but somehow it didn't work.
+async fn client_handle_connection(socks_port: u16, port: u16, socket: TcpStream) -> Result<()> {
+    debug!("Handling connection!");
 
-    if let Ok(_) = writer.send(Message::Connect(channel, port)).await {
-        if let Ok(_) = connected.await {
-            let mut writer = writer.clone();
-            connection::process(channel, socket, &mut data, &mut writer).await;
-        } else {
-            error!("Failed to connect to remote");
-        }
+    let dest_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, socks_port);
+    let mut dest_socket = TcpStream::connect(dest_addr).await?;
+
+    debug!("Connected, sending handshake request");
+    let packet: [u8; 3] = [
+        0x05, // v5
+        0x01, // 1 auth method
+        0x00, // my one auth method is no auth
+    ];
+    dest_socket.write_all(&packet[..]).await?;
+    debug!("Initial handshake sent. Awaiting handshake response");
+
+    let mut response: [u8; 2] = [0; 2];
+    dest_socket.read_exact(&mut response).await?;
+    if response[0] != 0x05 {
+        bail!("SOCKS incorrect response version {}", response[0]);
     }
+    if response[1] == 0xFF {
+        bail!("SOCKS server says no acceptable auth");
+    }
+    if response[1] != 0x00 {
+        bail!("SOCKS server chose something wild? {}", response[1]);
+    }
+
+    debug!("Handshake response received, sending connect request");
+    let packet: [u8; 10] = [
+        0x05,                                       // version again :P
+        0x01,                                       // connect
+        0x00,                                       // reserved!
+        0x01,                                       // ipv4
+        127,                                        // lo
+        0,                                          // ..ca..
+        0,                                          // ..lho..
+        1,                                          // ..st
+        ((port & 0xFF00) >> 8).try_into().unwrap(), // port (high)
+        ((port & 0x00FF) >> 0).try_into().unwrap(), // port (low)
+    ];
+    dest_socket.write_all(&packet[..]).await?;
+
+    debug!("Connect request sent, awaiting response");
+    let mut response: [u8; 4] = [0; 4];
+    dest_socket.read_exact(&mut response).await?;
+    if response[0] != 0x05 {
+        bail!("SOCKS5 incorrect response version again? {}", response[0]);
+    }
+    if response[1] != 0x00 {
+        bail!("SOCKS5 reports a connect error {}", response[1]);
+    }
+    // Now we 100% do not care about the following information but we must
+    // discard it so we can get to the good stuff. response[3] is the type of address...
+    if response[3] == 0x01 {
+        // IPv4 - 4 bytes.
+        let mut response: [u8; 4] = [0; 4];
+        dest_socket.read_exact(&mut response).await?;
+    } else if response[3] == 0x03 {
+        // Domain Name
+        let len = dest_socket.read_u8().await?;
+        for _ in 0..len {
+            dest_socket.read_u8().await?; // So slow!
+        }
+    } else if response[3] == 0x04 {
+        // IPv6 - 8 bytes
+        let mut response: [u8; 8] = [0; 8];
+        dest_socket.read_exact(&mut response).await?;
+    } else {
+        bail!(
+            "SOCKS5 sent me an address I don't understand {}",
+            response[3]
+        );
+    }
+    // Finally the port number. Again, garbage, but it's in the packet we need to skip.
+    let mut response: [u8; 2] = [0; 2];
+    dest_socket.read_exact(&mut response).await?;
+
+    info!("Connection established on port {}", port);
+
+    let (client_read_half, client_write_half) = socket.into_split();
+    let (server_read_half, server_write_half) = dest_socket.into_split();
+    let client_to_server = tokio::spawn(async move {
+        let mut client_read_half = client_read_half;
+        let mut server_write_half = server_write_half;
+        tokio::io::copy(&mut client_read_half, &mut server_write_half).await
+    });
+    let server_to_client = tokio::spawn(async move {
+        let mut server_read_half = server_read_half;
+        let mut client_write_half = client_write_half;
+        tokio::io::copy(&mut server_read_half, &mut client_write_half).await
+    });
+
+    let client_err = client_to_server.await;
+    debug!("Done client -> server");
+    let svr_err = server_to_client.await;
+    debug!("Done server -> client");
+
+    if let Ok(Err(e)) = client_err {
+        return Err(e.into());
+    } else if let Ok(Err(e)) = svr_err {
+        return Err(e.into());
+    }
+
+    Ok(())
 }
 
-async fn client_listen(
-    port: u16,
-    writer: mpsc::Sender<Message>,
-    connections: ConnectionTable,
-) -> Result<()> {
+async fn client_listen(port: u16, socks_port: u16) -> Result<()> {
     loop {
         let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await?;
         loop {
             // The second item contains the IP and port of the new
             // connection, but we don't care.
-            let (mut socket, _) = listener.accept().await?;
+            let (socket, _) = listener.accept().await?;
 
-            let (writer, connections) = (writer.clone(), connections.clone());
             tokio::spawn(async move {
-                client_handle_connection(port, writer, connections, &mut socket).await;
+                if let Err(e) = client_handle_connection(socks_port, port, socket).await {
+                    error!("Error handling connection: {:?}", e);
+                } else {
+                    debug!("Done???");
+                }
             });
         }
     }
@@ -233,7 +276,6 @@ async fn client_listen(
 
 async fn client_read<T: AsyncRead + Unpin>(
     reader: &mut MessageReader<T>,
-    connections: ConnectionTable,
     events: mpsc::Sender<ui::UIEvent>,
 ) -> Result<()> {
     info!("Running");
@@ -244,24 +286,6 @@ async fn client_read<T: AsyncRead + Unpin>(
         use Message::*;
         match message {
             Ping => (),
-            Connected(channel) => {
-                let mut connections = connections.clone();
-                tokio::spawn(async move {
-                    connections.connected(channel);
-                });
-            }
-            Close(channel) => {
-                let mut connections = connections.clone();
-                tokio::spawn(async move {
-                    connections.remove(channel);
-                });
-            }
-            Data(channel, buf) => {
-                let connections = connections.clone();
-                tokio::spawn(async move {
-                    connections.receive(channel, buf).await;
-                });
-            }
             Ports(ports) => {
                 if let Err(_) = events.send(ui::UIEvent::Ports(ports)).await {
                     // TODO: Log
@@ -295,6 +319,7 @@ async fn client_pipe_stderr<Debug: AsyncBufRead + Unpin>(
 }
 
 async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
+    socks_port: u16,
     reader: &mut MessageReader<Reader>,
     writer: &mut MessageWriter<Writer>,
     events: mpsc::Sender<ui::UIEvent>,
@@ -308,20 +333,13 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
         bail!("Expected a hello message from the remote server");
     }
 
-    let connections = ConnectionTable::new();
-
     // And now really get into it...
     let (msg_sender, mut msg_receiver) = mpsc::channel(32);
 
-    _ = events
-        .send(ui::UIEvent::Connected(
-            msg_sender.clone(),
-            connections.clone(),
-        ))
-        .await;
+    _ = events.send(ui::UIEvent::Connected(socks_port)).await;
 
     let writing = pump_write(&mut msg_receiver, writer);
-    let reading = client_read(reader, connections, events);
+    let reading = client_read(reader, events);
     tokio::pin!(reading);
     tokio::pin!(writing);
 
@@ -384,21 +402,32 @@ pub async fn run_server() {
     }
 }
 
-async fn spawn_ssh(server: &str) -> Result<tokio::process::Child, std::io::Error> {
+async fn spawn_ssh(server: &str) -> Result<(tokio::process::Child, u16), std::io::Error> {
+    let socks_port = {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        listener.local_addr()?.port()
+    };
+
     let mut cmd = process::Command::new("ssh");
-    cmd.arg("-T").arg(server).arg("fwd").arg("--server");
+    cmd.arg("-T")
+        .arg("-D")
+        .arg(socks_port.to_string())
+        .arg(server)
+        .arg("fwd")
+        .arg("--server");
 
     cmd.stdout(std::process::Stdio::piped());
     cmd.stdin(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
-    cmd.spawn()
+    let child = cmd.spawn()?;
+    Ok((child, socks_port))
 }
 
 async fn client_connect_loop(remote: &str, events: mpsc::Sender<ui::UIEvent>) {
     loop {
         _ = events.send(ui::UIEvent::Disconnected).await;
 
-        let mut child = spawn_ssh(remote).await.expect("failed to spawn");
+        let (mut child, socks_port) = spawn_ssh(remote).await.expect("failed to spawn");
 
         let mut stderr = BufReader::new(
             child
@@ -433,7 +462,7 @@ async fn client_connect_loop(remote: &str, events: mpsc::Sender<ui::UIEvent>) {
             client_pipe_stderr(&mut stderr, sec).await;
         });
 
-        if let Err(e) = client_main(&mut reader, &mut writer, events.clone()).await {
+        if let Err(e) = client_main(socks_port, &mut reader, &mut writer, events.clone()).await {
             error!("Server disconnected with error: {:?}", e);
         } else {
             warn!("Disconnected from server, reconnecting...");

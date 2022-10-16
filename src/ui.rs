@@ -1,8 +1,5 @@
 use crate::client_listen;
-use crate::{
-    message::{Message, PortDesc},
-    ConnectionTable,
-};
+use crate::message::PortDesc;
 use anyhow::Result;
 use crossterm::{
     cursor::MoveTo,
@@ -24,7 +21,7 @@ use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
 
 pub enum UIEvent {
-    Connected(mpsc::Sender<Message>, ConnectionTable),
+    Connected(u16),
     Disconnected,
     ServerLine(String),
     LogLine(log::Level, String),
@@ -61,18 +58,16 @@ impl log::Log for Logger {
 
 pub struct UI {
     events: mpsc::Receiver<UIEvent>,
-    writer: Option<mpsc::Sender<Message>>,
-    connections: Option<ConnectionTable>,
     listeners: HashMap<u16, oneshot::Sender<()>>,
+    socks_port: u16,
 }
 
 impl UI {
     pub fn new(events: mpsc::Receiver<UIEvent>) -> UI {
         UI {
             events,
-            writer: None,
-            connections: None,
             listeners: HashMap::new(),
+            socks_port: 0,
         }
     }
 
@@ -146,13 +141,12 @@ impl UI {
                 ev = self.events.recv() => {
                     match ev {
                         Some(UIEvent::Disconnected) => {
-                            self.writer = None;
-                            self.connections = None;
+                            self.socks_port = 0;
                             connected = false;
                         }
-                        Some(UIEvent::Connected(w,t)) => {
-                            self.writer = Some(w);
-                            self.connections = Some(t);
+                        Some(UIEvent::Connected(sp)) => {
+                            self.socks_port = sp;
+                            info!("Socks port {socks_port}", socks_port=self.socks_port);
                             connected = true;
                         }
                         Some(UIEvent::Ports(mut p)) => {
@@ -282,7 +276,7 @@ impl UI {
     }
 
     fn enable_disable_port(&mut self, port: u16) {
-        if let (Some(writer), Some(connections)) = (&self.writer, &self.connections) {
+        if self.socks_port != 0 {
             if let Some(_) = self.listeners.remove(&port) {
                 return; // We disabled the listener.
             }
@@ -291,10 +285,10 @@ impl UI {
             let (l, stop) = oneshot::channel();
             self.listeners.insert(port, l);
 
-            let (writer, connections) = (writer.clone(), connections.clone());
+            let socks_port = self.socks_port;
             tokio::spawn(async move {
                 let result = tokio::select! {
-                    r = client_listen(port, writer, connections) => r,
+                    r = client_listen(port, socks_port) => r,
                     _ = stop => Ok(()),
                 };
                 if let Err(e) = result {

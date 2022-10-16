@@ -25,12 +25,8 @@ pub struct PortDesc {
 pub enum Message {
     Ping,                       // Ignored on both sides, can be used to test connection.
     Hello(u8, u8, Vec<String>), // Server info announcement: major version, minor version, headers.
-    Connect(u64, u16),          // Request to connect on a port from client to server.
-    Connected(u64),             // Sucessfully connected from server to client.
-    Close(u64),                 // Notify that one or the other end of a channel is closed.
     Refresh,                    // Request to refresh list of ports from client.
     Ports(Vec<PortDesc>),       // List of available ports from server to client.
-    Data(u64, Bytes),           // Transmit data on a channel.
 }
 
 impl Message {
@@ -55,19 +51,6 @@ impl Message {
                     put_string(result, detail);
                 }
             }
-            Connect(channel, port) => {
-                result.put_u8(0x02);
-                result.put_u64(*channel);
-                result.put_u16(*port);
-            }
-            Connected(channel) => {
-                result.put_u8(0x03);
-                result.put_u64(*channel);
-            }
-            Close(channel) => {
-                result.put_u8(0x04);
-                result.put_u64(*channel);
-            }
             Refresh => {
                 result.put_u8(0x05);
             }
@@ -82,12 +65,6 @@ impl Message {
                     let sliced = slice_up_to(&port.desc, u16::max_value().into());
                     put_string(result, sliced);
                 }
-            }
-            Data(channel, bytes) => {
-                result.put_u8(0x07);
-                result.put_u64(*channel);
-                result.put_u16(bytes.len().try_into().expect("Payload too big"));
-                result.put_slice(bytes); // I hate that this copies. We should make this an async write probably, maybe?
             }
         };
     }
@@ -106,19 +83,6 @@ impl Message {
                 }
                 Ok(Hello(major, minor, details))
             }
-            0x02 => {
-                let channel = get_u64(cursor)?;
-                let port = get_u16(cursor)?;
-                Ok(Connect(channel, port))
-            }
-            0x03 => {
-                let channel = get_u64(cursor)?;
-                Ok(Connected(channel))
-            }
-            0x04 => {
-                let channel = get_u64(cursor)?;
-                Ok(Close(channel))
-            }
             0x05 => Ok(Refresh),
             0x06 => {
                 let count = get_u16(cursor)?;
@@ -129,12 +93,6 @@ impl Message {
                     ports.push(PortDesc { port, desc });
                 }
                 Ok(Ports(ports))
-            }
-            0x07 => {
-                let channel = get_u64(cursor)?;
-                let length = get_u16(cursor)?;
-                let data = get_bytes(cursor, length.into())?;
-                Ok(Data(channel, data))
             }
             b => Err(MessageError::Unknown(b).into()),
         }
@@ -153,13 +111,6 @@ fn get_u16(cursor: &mut Cursor<&[u8]>) -> Result<u16, MessageError> {
         return Err(MessageError::Incomplete);
     }
     Ok(cursor.get_u16())
-}
-
-fn get_u64(cursor: &mut Cursor<&[u8]>) -> Result<u64, MessageError> {
-    if cursor.remaining() < 8 {
-        return Err(MessageError::Incomplete);
-    }
-    Ok(cursor.get_u64())
 }
 
 fn get_bytes(cursor: &mut Cursor<&[u8]>, length: usize) -> Result<Bytes, MessageError> {
@@ -281,9 +232,6 @@ mod message_tests {
             vec!["One".to_string(), "Two".to_string(), "Three".to_string()],
         ));
         assert_round_trip(Hello(0x00, 0x01, vec![]));
-        assert_round_trip(Connect(0x1234567890123456, 0x1234));
-        assert_round_trip(Connected(0x1234567890123456));
-        assert_round_trip(Close(0x1234567890123456));
         assert_round_trip(Refresh);
         assert_round_trip(Ports(vec![]));
         assert_round_trip(Ports(vec![
@@ -296,8 +244,6 @@ mod message_tests {
                 desc: "metadata-library".to_string(),
             },
         ]));
-        assert_round_trip(Data(0x1234567890123456, vec![1, 2, 3, 4].into()));
-        assert_round_trip(Data(0x123, vec![0; u16::max_value().into()].into()));
     }
 
     #[test]

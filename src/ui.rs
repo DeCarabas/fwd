@@ -2,7 +2,7 @@ use crate::client_listen;
 use crate::message::PortDesc;
 use anyhow::Result;
 use crossterm::{
-    cursor::{MoveTo, RestorePosition, SavePosition},
+    cursor::MoveTo,
     event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
     execute, queue,
     style::{Color, PrintStyledContent, Stylize},
@@ -68,6 +68,7 @@ pub struct UI {
     ports: Option<Vec<PortDesc>>,
     lines: VecDeque<String>,
     alternate_screen: bool,
+    raw_mode: bool,
 }
 
 impl UI {
@@ -82,11 +83,14 @@ impl UI {
             ports: None,
             lines: VecDeque::with_capacity(1024),
             alternate_screen: false,
+            raw_mode: false,
         }
     }
 
     pub async fn run(&mut self) -> Result<()> {
+        self.enter_alternate_screen()?;
         let result = self.run_core().await;
+        _ = self.disable_raw_mode();
         _ = self.leave_alternate_screen();
         result
     }
@@ -109,7 +113,7 @@ impl UI {
     }
 
     fn render_disconnected(&mut self) -> Result<()> {
-        self.leave_alternate_screen()?;
+        self.disable_raw_mode()?;
         let mut stdout = stdout();
 
         let (columns, _) = size()?;
@@ -117,20 +121,19 @@ impl UI {
 
         execute!(
             stdout,
-            SavePosition,
+            Clear(ClearType::All),
             MoveTo(0, 0),
             PrintStyledContent(
-                format!("{:^columns$}", "Not Connected")
+                format!("{:^columns$}\r\n", "Not Connected")
                     .with(Color::Black)
                     .on(Color::Red)
             ),
-            RestorePosition,
         )?;
         Ok(())
     }
 
     fn render_connected(&mut self) -> Result<()> {
-        self.enter_alternate_screen()?;
+        self.enable_raw_mode()?;
         let mut stdout = stdout();
 
         let (columns, rows) = size()?;
@@ -254,6 +257,22 @@ impl UI {
         }
     }
 
+    fn enable_raw_mode(&mut self) -> Result<()> {
+        if !self.raw_mode {
+            enable_raw_mode()?;
+            self.raw_mode = true;
+        }
+        Ok(())
+    }
+
+    fn disable_raw_mode(&mut self) -> Result<()> {
+        if self.raw_mode {
+            disable_raw_mode()?;
+            self.raw_mode = false;
+        }
+        Ok(())
+    }
+
     fn enter_alternate_screen(&mut self) -> Result<()> {
         if !self.alternate_screen {
             enable_raw_mode()?;
@@ -333,6 +352,7 @@ impl UI {
         match event {
             Some(UIEvent::Disconnected) => {
                 self.socks_port = 0;
+                self.listeners = HashMap::new(); // Bye.
             }
             Some(UIEvent::Connected(sp)) => {
                 self.socks_port = sp;

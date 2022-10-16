@@ -76,16 +76,20 @@ pub async fn run_server() {
 /// Wait for the server to be ready; we know the server is there and
 /// listening when we see the special sync marker, which is 8 NUL bytes in a
 /// row.
-///
-/// TODO: We should be pumping stderr too.
-async fn client_sync<Read: AsyncRead + Unpin>(
-    reader: &mut Read,
+async fn client_sync<S: AsyncRead + Unpin, T: AsyncRead + Unpin>(
+    reader: &mut S,
+    client_stderr: &mut T,
 ) -> Result<(), tokio::io::Error> {
     info!("Waiting for synchronization marker...");
 
+    let mut stderr = tokio::io::stderr();
     let mut stdout = tokio::io::stdout();
     let mut seen = 0;
     tokio::select! {
+        result = tokio::io::copy(client_stderr, &mut stderr) => match result {
+            Ok(_) => Ok(()), // ?
+            Err(e) => Err(e),
+        },
         result = async {
             while seen < 8 {
                 let byte = reader.read_u8().await?;
@@ -193,30 +197,8 @@ async fn client_handle_connection(
 
     info!("Connection established on port {}", port);
 
-    let (client_read_half, client_write_half) = socket.into_split();
-    let (server_read_half, server_write_half) = dest_socket.into_split();
-    let client_to_server = tokio::spawn(async move {
-        let mut client_read_half = client_read_half;
-        let mut server_write_half = server_write_half;
-        tokio::io::copy(&mut client_read_half, &mut server_write_half).await
-    });
-    let server_to_client = tokio::spawn(async move {
-        let mut server_read_half = server_read_half;
-        let mut client_write_half = client_write_half;
-        tokio::io::copy(&mut server_read_half, &mut client_write_half).await
-    });
-
-    let client_err = client_to_server.await;
-    debug!("Done client -> server");
-    let svr_err = server_to_client.await;
-    debug!("Done server -> client");
-
-    if let Ok(Err(e)) = client_err {
-        return Err(e.into());
-    } else if let Ok(Err(e)) = svr_err {
-        return Err(e.into());
-    }
-
+    let mut socket = socket;
+    tokio::io::copy_bidirectional(&mut socket, &mut dest_socket).await?;
     Ok(())
 }
 
@@ -393,7 +375,7 @@ async fn client_connect_loop(remote: &str, events: mpsc::Sender<ui::UIEvent>) {
                 .expect("child did not have a handle to stdout"),
         );
 
-        if let Err(e) = client_sync(&mut reader).await {
+        if let Err(e) = client_sync(&mut reader, &mut stderr).await {
             error!("Error synchronizing: {:?}", e);
             match child.wait().await {
                 Ok(status) => {

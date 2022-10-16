@@ -32,9 +32,6 @@ mod ui;
 /// (because the last write end of this channel closed) *or* the remote
 /// connection has closed. [client_main] uses this fact to its advantage to
 /// detect when the connection has failed.
-///
-/// At some point we may even automatically reconnect in response!
-///
 async fn pump_write<T: AsyncWrite + Unpin>(
     messages: &mut mpsc::Receiver<Message>,
     writer: &mut MessageWriter<T>,
@@ -48,7 +45,7 @@ async fn pump_write<T: AsyncWrite + Unpin>(
 // ----------------------------------------------------------------------------
 // Server
 
-async fn server_read<T: AsyncRead + Unpin>(
+async fn server_handle_messages<T: AsyncRead + Unpin>(
     reader: &mut MessageReader<T>,
     writer: mpsc::Sender<Message>,
 ) -> Result<()> {
@@ -90,7 +87,7 @@ async fn server_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     // Jump into it...
     let (msg_sender, mut msg_receiver) = mpsc::channel(32);
     let writing = pump_write(&mut msg_receiver, writer);
-    let reading = server_read(reader, msg_sender);
+    let reading = server_handle_messages(reader, msg_sender);
     tokio::pin!(reading);
     tokio::pin!(writing);
 
@@ -119,21 +116,30 @@ async fn server_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     }
 }
 
+// ----------------------------------------------------------------------------
+// Client
+
+/// Wait for the server to be ready; we know the server is there and
+/// listening when we see the special sync marker, which is 8 NUL bytes in a
+/// row.
+///
+/// TODO: We should be pumping stderr too.
 async fn client_sync<Read: AsyncRead + Unpin>(
     reader: &mut Read,
 ) -> Result<(), tokio::io::Error> {
     info!("Waiting for synchronization marker...");
 
     let mut stdout = tokio::io::stdout();
+    let mut seen = 0;
     tokio::select! {
         result = async {
-            let mut seen = 0;
             while seen < 8 {
                 let byte = reader.read_u8().await?;
                 if byte == 0 {
                     seen += 1;
                 } else {
                     stdout.write_u8(byte).await?;
+                    seen = 0;
                 }
             }
 
@@ -143,7 +149,7 @@ async fn client_sync<Read: AsyncRead + Unpin>(
 }
 
 /// Handle an incoming client connection, by forwarding it to the SOCKS5
-/// server at the specified port.
+/// server at the specified port. This is the core of the entire thing.
 ///
 /// This contains a very simplified implementation of a SOCKS5 connector,
 /// enough to work with the SSH I have. I would have liked it to be SOCKS4,
@@ -258,6 +264,8 @@ async fn client_handle_connection(
     Ok(())
 }
 
+/// Listen on a port that we are currently forwarding, and use the SOCKS5
+/// proxy on the specified port to handle the connections.
 async fn client_listen(port: u16, socks_port: u16) -> Result<()> {
     loop {
         let listener =
@@ -281,24 +289,20 @@ async fn client_listen(port: u16, socks_port: u16) -> Result<()> {
     }
 }
 
-async fn client_read<T: AsyncRead + Unpin>(
+async fn client_handle_messages<T: AsyncRead + Unpin>(
     reader: &mut MessageReader<T>,
     events: mpsc::Sender<ui::UIEvent>,
 ) -> Result<()> {
-    info!("Running");
     loop {
-        let message = reader.read().await?;
-        // info!("> packet {:?}", message); // TODO: Smaller
-
         use Message::*;
-        match message {
+        match reader.read().await? {
             Ping => (),
             Ports(ports) => {
                 if let Err(_) = events.send(ui::UIEvent::Ports(ports)).await {
                     // TODO: Log
                 }
             }
-            _ => panic!("Unsupported: {:?}", message),
+            message => panic!("Unsupported: {:?}", message),
         };
     }
 }
@@ -346,7 +350,7 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     _ = events.send(ui::UIEvent::Connected(socks_port)).await;
 
     let writing = pump_write(&mut msg_receiver, writer);
-    let reading = client_read(reader, events);
+    let reading = client_handle_messages(reader, events);
     tokio::pin!(reading);
     tokio::pin!(writing);
 

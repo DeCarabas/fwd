@@ -2,7 +2,7 @@ use crate::client_listen;
 use crate::message::PortDesc;
 use anyhow::Result;
 use crossterm::{
-    cursor::MoveTo,
+    cursor::{MoveTo, RestorePosition, SavePosition},
     event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
     execute, queue,
     style::{Color, PrintStyledContent, Stylize},
@@ -88,14 +88,6 @@ impl UI {
     }
 
     pub async fn run(&mut self) -> Result<()> {
-        self.enter_alternate_screen()?;
-        let result = self.run_core().await;
-        _ = self.disable_raw_mode();
-        _ = self.leave_alternate_screen();
-        result
-    }
-
-    async fn run_core(&mut self) -> Result<()> {
         let mut console_events = EventStream::new();
 
         self.running = true;
@@ -113,6 +105,7 @@ impl UI {
     }
 
     fn render_disconnected(&mut self) -> Result<()> {
+        self.enter_alternate_screen()?;
         self.disable_raw_mode()?;
         let mut stdout = stdout();
 
@@ -121,18 +114,20 @@ impl UI {
 
         execute!(
             stdout,
-            Clear(ClearType::All),
+            SavePosition,
             MoveTo(0, 0),
             PrintStyledContent(
                 format!("{:^columns$}\r\n", "Not Connected")
                     .with(Color::Black)
                     .on(Color::Red)
             ),
+            RestorePosition,
         )?;
         Ok(())
     }
 
     fn render_connected(&mut self) -> Result<()> {
+        self.enter_alternate_screen()?;
         self.enable_raw_mode()?;
         let mut stdout = stdout();
 
@@ -402,5 +397,12 @@ impl UI {
                 self.running = false;
             }
         }
+    }
+}
+
+impl Drop for UI {
+    fn drop(&mut self) {
+        _ = self.disable_raw_mode();
+        _ = self.leave_alternate_screen();
     }
 }

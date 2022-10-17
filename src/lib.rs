@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use bytes::BytesMut;
 use log::LevelFilter;
 use log::{debug, error, info, warn};
 use message::{Message, MessageReader, MessageWriter};
@@ -84,12 +85,17 @@ async fn client_sync<S: AsyncRead + Unpin, T: AsyncRead + Unpin>(
 
     let mut stderr = tokio::io::stderr();
     let mut stdout = tokio::io::stdout();
+    let mut buf = BytesMut::with_capacity(1024);
+
     let mut seen = 0;
-    tokio::select! {
-        result = tokio::io::copy(client_stderr, &mut stderr) => match result {
-            Ok(_) => Ok(()), // ?
-            Err(e) => Err(e),
-        },
+    let result = tokio::select! {
+        result = async {
+            loop {
+                buf.clear();
+                client_stderr.read_buf(&mut buf).await?;
+                stderr.write_all(&buf[..]).await?;
+            }
+        } => result,
         result = async {
             while seen < 8 {
                 let byte = reader.read_u8().await?;
@@ -103,7 +109,17 @@ async fn client_sync<S: AsyncRead + Unpin, T: AsyncRead + Unpin>(
 
             Ok::<_, tokio::io::Error>(())
         } => result,
+    };
+
+    if let Err(_) = result {
+        // Something went wrong, let's just make sure we flush the client's
+        // stderr before we return.
+        _ = stderr.write_all(&buf[..]).await;
+        _ = tokio::io::copy(client_stderr, &mut stderr).await;
+        _ = stderr.flush().await;
     }
+
+    result
 }
 
 /// Handle an incoming client connection, by forwarding it to the SOCKS5
@@ -356,12 +372,10 @@ async fn client_connect_loop(remote: &str, events: mpsc::Sender<ui::UIEvent>) {
         let (mut child, socks_port) =
             spawn_ssh(remote).await.expect("failed to spawn");
 
-        let mut stderr = BufReader::new(
-            child
-                .stderr
-                .take()
-                .expect("child did not have a handle to stderr"),
-        );
+        let mut stderr = child
+            .stderr
+            .take()
+            .expect("child did not have a handle to stderr");
 
         let writer = child
             .stdin
@@ -395,6 +409,7 @@ async fn client_connect_loop(remote: &str, events: mpsc::Sender<ui::UIEvent>) {
             continue;
         }
 
+        let mut stderr = BufReader::new(stderr);
         let mut writer = MessageWriter::new(BufWriter::new(writer));
         let mut reader = MessageReader::new(reader);
 

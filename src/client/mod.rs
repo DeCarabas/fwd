@@ -12,6 +12,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::process;
 use tokio::sync::mpsc;
 
+mod config;
 mod ui;
 
 /// Wait for the server to be ready; we know the server is there and
@@ -374,7 +375,15 @@ pub async fn run_client(remote: &str) {
     _ = log::set_boxed_logger(ui::Logger::new(event_sender.clone()));
     log::set_max_level(LevelFilter::Info);
 
-    let mut ui = ui::UI::new(event_receiver);
+    let config = match config::load_config() {
+        Ok(config) => config.get(remote),
+        Err(e) => {
+            eprintln!("Error loading configuration: {:?}", e);
+            return;
+        }
+    };
+
+    let mut ui = ui::UI::new(event_receiver, config);
 
     // Start the reconnect loop.
     tokio::select! {

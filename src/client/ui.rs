@@ -1,4 +1,4 @@
-use super::client_listen;
+use super::{client_listen, config::ServerConfig};
 use crate::message::PortDesc;
 use anyhow::Result;
 use crossterm::{
@@ -65,12 +65,16 @@ struct Listener {
 }
 
 impl Listener {
-    pub fn from_desc(desc: PortDesc) -> Listener {
-        Listener {
-            enabled: false,
-            stop: None,
-            desc: Some(desc),
+    pub fn from_desc(
+        socks_port: Option<u16>,
+        desc: PortDesc,
+        enabled: bool,
+    ) -> Listener {
+        let mut listener = Listener { enabled, stop: None, desc: Some(desc) };
+        if enabled {
+            listener.start(socks_port);
         }
+        listener
     }
 
     pub fn enabled(&self) -> bool {
@@ -102,6 +106,7 @@ impl Listener {
             if let (Some(desc), Some(socks_port), None) =
                 (&self.desc, socks_port, &self.stop)
             {
+                info!("Starting port {port} to {socks_port}", port = desc.port);
                 let (l, stop) = oneshot::channel();
                 let port = desc.port;
                 tokio::spawn(async move {
@@ -127,16 +132,17 @@ pub struct UI {
     events: mpsc::Receiver<UIEvent>,
     ports: HashMap<u16, Listener>,
     socks_port: Option<u16>,
+    lines: VecDeque<String>,
+    config: ServerConfig,
+    selection: usize,
     running: bool,
     show_logs: bool,
-    selection: usize,
-    lines: VecDeque<String>,
     alternate_screen: bool,
     raw_mode: bool,
 }
 
 impl UI {
-    pub fn new(events: mpsc::Receiver<UIEvent>) -> UI {
+    pub fn new(events: mpsc::Receiver<UIEvent>, config: ServerConfig) -> UI {
         UI {
             events,
             ports: HashMap::new(),
@@ -145,6 +151,7 @@ impl UI {
             show_logs: false,
             selection: 0,
             lines: VecDeque::with_capacity(1024),
+            config,
             alternate_screen: false,
             raw_mode: false,
         }
@@ -419,9 +426,16 @@ impl UI {
                     {
                         listener.connect(self.socks_port, port_desc);
                     } else {
+                        let config = self.config.get(port_desc.port);
+                        info!("Port config {port_desc:?} -> {config:?}");
+
                         self.ports.insert(
                             port_desc.port,
-                            Listener::from_desc(port_desc),
+                            Listener::from_desc(
+                                self.socks_port,
+                                port_desc,
+                                config.enabled,
+                            ),
                         );
                     }
                 }

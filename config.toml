@@ -1,0 +1,9 @@
+# This is an example config file
+auto = true
+
+[servers."coder.doty-dev"]
+auto = true
+
+[servers."coder.doty-dev".ports]
+10350 = "Tilt UI"
+8080 = true

@@ -2,24 +2,31 @@ use super::{client_listen, config::ServerConfig};
 use crate::message::PortDesc;
 use anyhow::Result;
 use crossterm::{
-    cursor::{MoveTo, RestorePosition, SavePosition},
     event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
-    execute, queue,
-    style::{Color, PrintStyledContent, Stylize},
+    execute,
     terminal::{
-        disable_raw_mode, enable_raw_mode, size, Clear, ClearType,
-        DisableLineWrap, EnableLineWrap, EnterAlternateScreen,
-        LeaveAlternateScreen,
+        disable_raw_mode, enable_raw_mode, DisableLineWrap, EnableLineWrap,
+        EnterAlternateScreen, LeaveAlternateScreen,
     },
 };
 use log::{error, info, Level, Metadata, Record};
 use open;
 use std::collections::vec_deque::VecDeque;
 use std::collections::{HashMap, HashSet};
-use std::io::{stdout, Write};
+use std::io::stdout;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
+use tui::{
+    backend::{Backend, CrosstermBackend},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Style},
+    text::Span,
+    widgets::{
+        Block, Borders, List, ListItem, ListState, Row, Table, TableState,
+    },
+    Frame, Terminal,
+};
 
 pub enum UIEvent {
     Connected(u16),
@@ -134,7 +141,7 @@ pub struct UI {
     socks_port: Option<u16>,
     lines: VecDeque<String>,
     config: ServerConfig,
-    selection: usize,
+    selection: TableState,
     running: bool,
     show_logs: bool,
     alternate_screen: bool,
@@ -149,7 +156,7 @@ impl UI {
             socks_port: None,
             running: true,
             show_logs: false,
-            selection: 0,
+            selection: TableState::default(),
             lines: VecDeque::with_capacity(1024),
             config,
             alternate_screen: false,
@@ -159,130 +166,137 @@ impl UI {
 
     pub async fn run(&mut self) -> Result<()> {
         let mut console_events = EventStream::new();
+        self.enter_alternate_screen()?;
+
+        let stdout = std::io::stdout();
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
+
+        let mut last_connected = false;
 
         self.running = true;
         while self.running {
             self.handle_events(&mut console_events).await;
 
+            let pos = terminal.get_cursor()?;
+
+            if last_connected != self.connected() {
+                terminal.clear()?;
+                last_connected = self.connected();
+            }
+
             if self.connected() {
-                self.render_connected()?;
+                self.enable_raw_mode()?;
             } else {
-                self.render_disconnected()?;
+                self.disable_raw_mode()?;
             }
+
+            terminal.draw(|f| {
+                if self.connected() {
+                    self.render_connected(f);
+                } else {
+                    self.render_disconnected(f, pos);
+                }
+            })?;
         }
 
         Ok(())
     }
 
-    fn render_disconnected(&mut self) -> Result<()> {
-        self.enter_alternate_screen()?;
-        self.disable_raw_mode()?;
-        let mut stdout = stdout();
+    fn render_disconnected<T: Backend>(
+        &mut self,
+        frame: &mut Frame<T>,
+        pos: (u16, u16),
+    ) {
+        let size = frame.size();
 
-        let (columns, _) = size()?;
-        let columns: usize = columns.into();
+        let block = Block::default()
+            .title(Span::styled(
+                "Not Connected",
+                Style::default().fg(Color::Black).bg(Color::Red),
+            ))
+            .borders(Borders::NONE);
 
-        execute!(
-            stdout,
-            SavePosition,
-            MoveTo(0, 0),
-            PrintStyledContent(
-                format!("{:^columns$}\r\n", "Not Connected")
-                    .with(Color::Black)
-                    .on(Color::Red)
-            ),
-            RestorePosition,
-        )?;
-        Ok(())
+        frame.render_widget(block, size);
+
+        frame.set_cursor(pos.0, pos.1);
     }
 
-    fn render_connected(&mut self) -> Result<()> {
-        self.enter_alternate_screen()?;
-        self.enable_raw_mode()?;
-        let mut stdout = stdout();
-
-        let (columns, rows) = size()?;
-        let columns: usize = columns.into();
-
-        queue!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
-
-        // List of open ports
-        // How wide are all the things?
-        let padding = 1;
-        let enabled_width = 1; // Just 1 character
-        let port_width = 5; // 5 characters for 16-bit number
-
-        let description_width = columns
-            - (padding
-                + padding
-                + enabled_width
-                + padding
-                + port_width
-                + padding);
-
-        print!(
-            "{}",
-            format!(
-                "  {enabled:>enabled_width$} {port:>port_width$} {description:<description_width$}\r\n",
-                enabled = "E",
-                port = "port",
-                description = "description"
-            )
-                .negative()
-        );
-
-        let max_ports: usize = if self.show_logs {
-            (rows / 2) - 1
+    fn render_connected<T: Backend>(&mut self, frame: &mut Frame<T>) {
+        let constraints = if self.show_logs {
+            vec![Constraint::Percentage(50), Constraint::Percentage(50)]
         } else {
-            rows - 2
-        }
-        .into();
+            vec![Constraint::Percentage(100)]
+        };
 
-        let ports = self.get_ui_ports();
-        for (index, port) in ports.into_iter().take(max_ports).enumerate() {
-            let listener = self.ports.get(&port).unwrap();
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints)
+            .split(frame.size());
 
-            let caret = if index == self.selection {
-                "\u{2B46}"
-            } else {
-                " "
-            };
-
-            let state = if listener.enabled { "+" } else { " " };
-            let desc: &str = match &listener.desc {
-                Some(port_desc) => &port_desc.desc,
-                None => "",
-            };
-
-            print!("{caret} {state:>enabled_width$} {port:port_width$} {desc:description_width$}\r\n");
-        }
-
-        // Log
+        self.render_ports(frame, chunks[0]);
         if self.show_logs {
-            let hr: usize = ((rows / 2) - 2).into();
-            let start: usize = if self.lines.len() > hr {
-                self.lines.len() - hr
-            } else {
-                0
-            };
+            self.render_logs(frame, chunks[1]);
+        }
+    }
 
-            queue!(stdout, MoveTo(0, rows / 2))?;
-            print!("{}", format!("{:columns$}", " Log").negative());
-            for line in self.lines.range(start..) {
-                print!("{}\r\n", line);
-            }
+    fn render_ports<B: Backend>(&mut self, frame: &mut Frame<B>, size: Rect) {
+        let enabled_port_style = Style::default();
+        let disabled_port_style = Style::default().fg(Color::DarkGray);
+
+        let mut rows = Vec::new();
+        let ports = self.get_ui_ports();
+        let port_strings: Vec<_> =
+            ports.iter().map(|p| format!("{p}")).collect();
+        for (index, port) in ports.into_iter().enumerate() {
+            let listener = self.ports.get(&port).unwrap();
+            rows.push(
+                Row::new(vec![
+                    &port_strings[index][..],
+                    match &listener.desc {
+                        Some(port_desc) => &port_desc.desc,
+                        None => "",
+                    },
+                ])
+                .style(if listener.enabled {
+                    enabled_port_style
+                } else {
+                    disabled_port_style
+                }),
+            );
         }
 
-        queue!(stdout, MoveTo(0, rows - 1))?;
-        print!(
-            "{}",
-            format!(
-                "{:columns$}",
-                " q - quit  |  l - toggle log  |  \u{2191}/\u{2193} - select port  | e - enable/disable | <enter> - browse"
-            ).negative()
-        );
-        stdout.flush()?;
-        Ok(())
+        // TODO: I don't know how to express the lengths I want here.
+        //       That last length is extremely wrong but guaranteed to work I
+        //       guess.
+        let widths =
+            vec![Constraint::Length(5), Constraint::Length(size.width)];
+
+        let port_list = Table::new(rows)
+            .header(Row::new(vec!["Port", "Description"]))
+            .block(Block::default().title("Ports").borders(Borders::ALL))
+            .column_spacing(1)
+            .widths(&widths)
+            .highlight_symbol(">> ");
+
+        frame.render_stateful_widget(port_list, size, &mut self.selection);
+    }
+
+    fn render_logs<B: Backend>(&mut self, frame: &mut Frame<B>, size: Rect) {
+        let items: Vec<_> =
+            self.lines.iter().map(|l| ListItem::new(&l[..])).collect();
+
+        let list = List::new(items)
+            .block(Block::default().title("Log").borders(Borders::ALL));
+
+        let mut list_state = ListState::default();
+        list_state.select(if self.lines.len() > 0 {
+            Some(self.lines.len() - 1)
+        } else {
+            None
+        });
+
+        frame.render_stateful_widget(list, size, &mut list_state);
     }
 
     fn connected(&self) -> bool {
@@ -299,11 +313,7 @@ impl UI {
     }
 
     fn get_selected_port(&self) -> Option<u16> {
-        if self.selection < self.ports.len() {
-            Some(self.get_ui_ports()[self.selection])
-        } else {
-            None
-        }
+        self.selection.selected().map(|i| self.get_ui_ports()[i])
     }
 
     fn enable_disable_port(&mut self, port: u16) {
@@ -378,15 +388,25 @@ impl UI {
                 }
                 KeyEvent { code: KeyCode::Up, .. }
                 | KeyEvent { code: KeyCode::Char('j'), .. } => {
-                    if self.selection > 0 {
-                        self.selection -= 1;
-                    }
+                    let index = match self.selection.selected() {
+                        Some(i) => {
+                            if i == 0 {
+                                0
+                            } else {
+                                i - 1
+                            }
+                        }
+                        None => 0,
+                    };
+                    self.selection.select(Some(index));
                 }
                 KeyEvent { code: KeyCode::Down, .. }
                 | KeyEvent { code: KeyCode::Char('k'), .. } => {
-                    if self.selection != self.ports.len() - 1 {
-                        self.selection += 1;
-                    }
+                    let index = match self.selection.selected() {
+                        Some(i) => (i + 1).min(self.ports.len() - 1),
+                        None => 0,
+                    };
+                    self.selection.select(Some(index));
                 }
                 KeyEvent { code: KeyCode::Enter, .. } => {
                     if let Some(p) = self.get_selected_port() {
@@ -453,9 +473,11 @@ impl UI {
                     }
                 }
 
-                if self.selection >= self.ports.len() && self.ports.len() > 0 {
-                    self.selection = self.ports.len() - 1;
-                }
+                let selected = match self.selection.selected() {
+                    Some(i) => i.min(self.ports.len() - 1),
+                    None => 0,
+                };
+                self.selection.select(Some(selected));
             }
             Some(UIEvent::ServerLine(line)) => {
                 while self.lines.len() >= 1024 {

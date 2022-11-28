@@ -21,7 +21,6 @@ use tui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
-    text::Span,
     widgets::{
         Block, Borders, List, ListItem, ListState, Row, Table, TableState,
     },

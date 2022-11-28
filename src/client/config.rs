@@ -15,6 +15,10 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
+    pub fn contains_key(&self, port: u16) -> bool {
+        self.ports.contains_key(&port)
+    }
+
     pub fn get(&self, port: u16) -> PortConfig {
         match self.ports.get(&port) {
             None => PortConfig { enabled: self.auto, description: None },

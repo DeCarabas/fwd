@@ -457,14 +457,11 @@ impl UI {
                 }
 
                 for port in leftover_ports {
-                    let mut enabled = false;
                     if let Some(listener) = self.ports.get_mut(&port) {
-                        enabled = listener.enabled;
                         listener.disconnect();
                     }
 
-                    if !enabled {
-                        // Just... forget it? Or leave it around forever?
+                    if !self.config.contains_key(port) {
                         self.ports.remove(&port);
                     }
                 }

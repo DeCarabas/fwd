@@ -36,6 +36,11 @@ pub enum UIEvent {
     Ports(Vec<PortDesc>),
 }
 
+pub enum UIReturn {
+    Quit,
+    Disconnected,
+}
+
 #[derive(Debug, Clone)]
 pub struct Logger {
     line_sender: mpsc::Sender<UIEvent>,
@@ -164,62 +169,54 @@ impl UI {
         }
     }
 
-    pub async fn run(&mut self) -> Result<()> {
+    pub async fn run(&mut self) -> Result<UIReturn> {
+        loop {
+            while !self.connected() {
+                let ev = self.events.recv().await;
+                self.handle_internal_event(ev);
+            }
+
+            let result = self.run_connected().await;
+            _ = self.leave_alternate_screen();
+            _ = self.disable_raw_mode();
+
+            match result {
+                Err(e) => {
+                    return Err(e);
+                }
+                Ok(UIReturn::Disconnected) => {
+                    continue;
+                }
+                Ok(UIReturn::Quit) => {
+                    return Ok(UIReturn::Quit);
+                }
+            }
+        }
+    }
+
+    async fn run_connected(&mut self) -> Result<UIReturn> {
         let mut console_events = EventStream::new();
         self.enter_alternate_screen()?;
+        self.enable_raw_mode()?;
 
         let stdout = std::io::stdout();
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
-        let mut last_connected = false;
-
         self.running = true;
-        while self.running {
+        while self.running && self.connected() {
             self.handle_events(&mut console_events).await;
-
-            let pos = terminal.get_cursor()?;
-
-            if last_connected != self.connected() {
-                terminal.clear()?;
-                last_connected = self.connected();
-            }
-
-            if self.connected() {
-                self.enable_raw_mode()?;
-            } else {
-                self.disable_raw_mode()?;
-            }
-
             terminal.draw(|f| {
-                if self.connected() {
-                    self.render_connected(f);
-                } else {
-                    self.render_disconnected(f, pos);
-                }
+                self.render_connected(f);
             })?;
         }
 
-        Ok(())
-    }
-
-    fn render_disconnected<T: Backend>(
-        &mut self,
-        frame: &mut Frame<T>,
-        pos: (u16, u16),
-    ) {
-        let size = frame.size();
-
-        let block = Block::default()
-            .title(Span::styled(
-                "Not Connected",
-                Style::default().fg(Color::Black).bg(Color::Red),
-            ))
-            .borders(Borders::NONE);
-
-        frame.render_widget(block, size);
-
-        frame.set_cursor(pos.0, pos.1);
+        let code = if self.running {
+            UIReturn::Disconnected
+        } else {
+            UIReturn::Quit
+        };
+        Ok(code)
     }
 
     fn render_connected<T: Backend>(&mut self, frame: &mut Frame<T>) {

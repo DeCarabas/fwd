@@ -21,5 +21,8 @@ tokio-stream = "0.1"
 toml = "0.5"
 tui = "0.19"
 
+[dev-dependencies]
+assert_matches = "1"
+
 [target.'cfg(target_os="linux")'.dependencies]
 procfs = "0.14.1"

@@ -232,7 +232,8 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
 ) -> Result<()> {
     // Wait for the server's announcement.
     if let Message::Hello(major, minor, _) = reader.read().await? {
-        if major != 0 || minor > 1 {
+        info!("Server Version: {major} {minor}");
+        if major != 0 || minor > 2 {
             bail!("Unsupported remote protocol version {}.{}", major, minor);
         }
     } else {
@@ -253,11 +254,13 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
             }
         } => {
             if let Err(e) = result {
+                print!("Error sending refreshes\n");
                 return Err(e.into());
             }
         },
         result = client_handle_messages(reader, events) => {
             if let Err(e) = result {
+                print!("Error handling messages\n");
                 return Err(e.into());
             }
         },
@@ -389,5 +392,93 @@ pub async fn run_client(remote: &str) {
     tokio::select! {
         _ = ui.run() => (),
         _ = client_connect_loop(remote, event_sender) => ()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert_matches::assert_matches;
+    use tokio::io::DuplexStream;
+    use tokio::sync::mpsc::Receiver;
+
+    struct Fixture {
+        _server_read: MessageReader<DuplexStream>,
+        server_write: MessageWriter<DuplexStream>,
+        _event_receiver: Receiver<ui::UIEvent>,
+        client_result: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
+    }
+
+    impl Fixture {
+        pub fn new() -> Self {
+            let (server_read, client_write) = tokio::io::duplex(4096);
+            let server_read = MessageReader::new(server_read);
+            let client_write = MessageWriter::new(client_write);
+
+            let (client_read, server_write) = tokio::io::duplex(4096);
+            let client_read = MessageReader::new(client_read);
+            let server_write = MessageWriter::new(server_write);
+
+            let (event_sender, event_receiver) = mpsc::channel(1024);
+
+            let client_result = tokio::spawn(async move {
+                let mut client_read = client_read;
+                let mut client_write = client_write;
+                client_main(
+                    0,
+                    &mut client_read,
+                    &mut client_write,
+                    event_sender,
+                )
+                .await
+            });
+
+            Fixture {
+                _server_read: server_read,
+                server_write,
+                _event_receiver: event_receiver,
+                client_result: Some(client_result),
+            }
+        }
+
+        pub async fn shutdown(mut self) -> anyhow::Result<()> {
+            let result = self.client_result.take();
+            drop(self); // Side effect: close all streams.
+            result.unwrap().await.expect("Unexpected join error")
+        }
+    }
+
+    #[tokio::test]
+    async fn basic_hello_sync() {
+        let mut t = Fixture::new();
+
+        t.server_write
+            .write(Message::Hello(0, 2, vec![]))
+            .await
+            .expect("Error sending hello");
+    }
+
+    #[tokio::test]
+    async fn basic_hello_high_minor() {
+        let mut t = Fixture::new();
+
+        t.server_write
+            .write(Message::Hello(0, 99, vec![]))
+            .await
+            .expect("Error sending hello");
+
+        assert_matches!(t.shutdown().await, Err(_));
+    }
+
+    #[tokio::test]
+    async fn basic_hello_wrong_major() {
+        let mut t = Fixture::new();
+
+        t.server_write
+            .write(Message::Hello(99, 0, vec![]))
+            .await
+            .expect("Error sending hello");
+
+        assert_matches!(t.shutdown().await, Err(_));
     }
 }

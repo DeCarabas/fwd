@@ -1,19 +1,39 @@
-use anyhow::Result;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::io::Cursor;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 // ----------------------------------------------------------------------------
-// Messages
+// Errors
 
 #[derive(Debug, Error)]
-pub enum MessageError {
+pub enum Error {
     #[error("Message type unknown: {0}")]
     Unknown(u8),
     #[error("Message incomplete")]
     Incomplete,
+    #[error("String contained invalid UTF8: {0}")]
+    InvalidString(std::str::Utf8Error),
+    #[error("IO Error occurred: {0}")]
+    IO(std::io::Error),
 }
+
+impl From<std::str::Utf8Error> for Error {
+    fn from(value: std::str::Utf8Error) -> Self {
+        Self::InvalidString(value)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(value: std::io::Error) -> Self {
+        Self::IO(value)
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+// ----------------------------------------------------------------------------
+// Messages
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct PortDesc {
@@ -23,10 +43,17 @@ pub struct PortDesc {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Message {
-    Ping,                       // Ignored on both sides, can be used to test connection.
-    Hello(u8, u8, Vec<String>), // Server info announcement: major version, minor version, headers.
-    Refresh,                    // Request to refresh list of ports from client.
-    Ports(Vec<PortDesc>),       // List of available ports from server to client.
+    // Ignored on both sides, can be used to test connection.
+    Ping,
+
+    // Server info announcement: major version, minor version, headers.
+    Hello(u8, u8, Vec<String>),
+
+    // Request to refresh list of ports from client.
+    Refresh,
+
+    // List of available ports from server to client.
+    Ports(Vec<PortDesc>),
 }
 
 impl Message {
@@ -46,7 +73,9 @@ impl Message {
                 result.put_u8(0x01);
                 result.put_u8(*major);
                 result.put_u8(*minor);
-                result.put_u16(details.len().try_into().expect("Too many details"));
+                result.put_u16(
+                    details.len().try_into().expect("Too many details"),
+                );
                 for detail in details {
                     put_string(result, detail);
                 }
@@ -62,7 +91,8 @@ impl Message {
                     result.put_u16(port.port);
 
                     // Port descriptions can be long, let's make sure they're not.
-                    let sliced = slice_up_to(&port.desc, u16::max_value().into());
+                    let sliced =
+                        slice_up_to(&port.desc, u16::max_value().into());
                     put_string(result, sliced);
                 }
             }
@@ -94,28 +124,28 @@ impl Message {
                 }
                 Ok(Ports(ports))
             }
-            b => Err(MessageError::Unknown(b).into()),
+            b => Err(Error::Unknown(b).into()),
         }
     }
 }
 
-fn get_u8(cursor: &mut Cursor<&[u8]>) -> Result<u8, MessageError> {
+fn get_u8(cursor: &mut Cursor<&[u8]>) -> Result<u8> {
     if !cursor.has_remaining() {
-        return Err(MessageError::Incomplete);
+        return Err(Error::Incomplete);
     }
     Ok(cursor.get_u8())
 }
 
-fn get_u16(cursor: &mut Cursor<&[u8]>) -> Result<u16, MessageError> {
+fn get_u16(cursor: &mut Cursor<&[u8]>) -> Result<u16> {
     if cursor.remaining() < 2 {
-        return Err(MessageError::Incomplete);
+        return Err(Error::Incomplete);
     }
     Ok(cursor.get_u16())
 }
 
-fn get_bytes(cursor: &mut Cursor<&[u8]>, length: usize) -> Result<Bytes, MessageError> {
+fn get_bytes(cursor: &mut Cursor<&[u8]>, length: usize) -> Result<Bytes> {
     if cursor.remaining() < length {
-        return Err(MessageError::Incomplete);
+        return Err(Error::Incomplete);
     }
 
     Ok(cursor.copy_to_bytes(length))
@@ -255,10 +285,7 @@ mod message_tests {
             str.push_str(&char);
         }
 
-        let msg = Ports(vec![PortDesc {
-            port: 8080,
-            desc: str,
-        }]);
+        let msg = Ports(vec![PortDesc { port: 8080, desc: str }]);
         msg.encode();
     }
 }

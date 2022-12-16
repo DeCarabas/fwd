@@ -1,5 +1,4 @@
 #!/bin/env python3
-import os
 import subprocess
 import sys
 
@@ -14,6 +13,7 @@ def ssh(remote, *args):
 
 def main(args):
     local("cargo", "build")
+    local("cargo", "build", "--target=x86_64-unknown-linux-gnu")
 
     remote = args[1]
     print(f"Copying file to {remote}...")
@@ -23,7 +23,7 @@ def main(args):
         capture_output=True,
     )
 
-    print(f"Starting process...")
+    print("Starting process...")
     subprocess.run(["target/debug/fwd", remote])
 
 

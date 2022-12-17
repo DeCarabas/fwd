@@ -20,7 +20,6 @@ tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 toml = "0.5"
 tui = "0.19"
-users = "0.11"
 xdg = "2"
 
 [dev-dependencies]
@@ -29,3 +28,6 @@ tempdir = "0.3"
 
 [target.'cfg(target_os="linux")'.dependencies]
 procfs = "0.14.1"
+
+[target.'cfg(target_family="unix")'.dependencies]
+users = "0.11"

@@ -54,6 +54,9 @@ pub enum Message {
 
     // List of available ports from server to client.
     Ports(Vec<PortDesc>),
+
+    // Browse a thing
+    Browse(String),
 }
 
 impl Message {
@@ -96,6 +99,10 @@ impl Message {
                     put_string(result, sliced);
                 }
             }
+            Browse(url) => {
+                result.put_u8(0x07);
+                put_string(result, url);
+            }
         };
     }
 
@@ -124,6 +131,7 @@ impl Message {
                 }
                 Ok(Ports(ports))
             }
+            0x07 => Ok(Browse(get_string(cursor)?)),
             b => Err(Error::Unknown(b).into()),
         }
     }
@@ -274,6 +282,7 @@ mod message_tests {
                 desc: "metadata-library".to_string(),
             },
         ]));
+        assert_round_trip(Browse("https://google.com/".to_string()));
     }
 
     #[test]

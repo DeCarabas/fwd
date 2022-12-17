@@ -4,6 +4,7 @@ use log::{error, warn};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::mpsc;
 
+mod browser;
 mod refresh;
 
 // We drive writes through an mpsc queue, because we not only handle requests
@@ -76,11 +77,13 @@ async fn server_main<
     let mut writer = MessageWriter::new(writer);
     let mut reader = MessageReader::new(reader);
 
-    let (_, result) = tokio::join!(
-        write_driver(&mut receiver, &mut writer),
-        server_loop(&mut reader, &mut sender)
-    );
-    result
+    let browse_sender = sender.clone();
+
+    tokio::select! {
+        _ = write_driver(&mut receiver, &mut writer) => Ok(()),
+        r = server_loop(&mut reader, &mut sender) => r,
+        r = browser::handle_browser_open(browse_sender) => r,
+    }
 }
 
 pub async fn run_server() {

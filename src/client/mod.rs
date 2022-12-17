@@ -185,7 +185,7 @@ async fn client_listen(port: u16, socks_port: u16) -> Result<()> {
 }
 
 async fn client_handle_messages<T: AsyncRead + Unpin>(
-    reader: &mut MessageReader<T>,
+    mut reader: MessageReader<T>,
     events: mpsc::Sender<ui::UIEvent>,
 ) -> Result<()> {
     loop {
@@ -226,8 +226,8 @@ async fn client_pipe_stderr<Debug: AsyncBufRead + Unpin>(
 
 async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
     socks_port: u16,
-    reader: &mut MessageReader<Reader>,
-    writer: &mut MessageWriter<Writer>,
+    mut reader: MessageReader<Reader>,
+    mut writer: MessageWriter<Writer>,
     events: mpsc::Sender<ui::UIEvent>,
 ) -> Result<()> {
     // Wait for the server's announcement.
@@ -354,8 +354,8 @@ async fn client_connect_loop(remote: &str, events: mpsc::Sender<ui::UIEvent>) {
         }
 
         let mut stderr = BufReader::new(stderr);
-        let mut writer = MessageWriter::new(BufWriter::new(writer));
-        let mut reader = MessageReader::new(reader);
+        let writer = MessageWriter::new(BufWriter::new(writer));
+        let reader = MessageReader::new(reader);
 
         let sec = events.clone();
         tokio::spawn(async move {
@@ -363,8 +363,7 @@ async fn client_connect_loop(remote: &str, events: mpsc::Sender<ui::UIEvent>) {
         });
 
         if let Err(e) =
-            client_main(socks_port, &mut reader, &mut writer, events.clone())
-                .await
+            client_main(socks_port, reader, writer, events.clone()).await
         {
             error!("Server disconnected with error: {:?}", e);
         } else {
@@ -422,15 +421,7 @@ mod tests {
             let (event_sender, event_receiver) = mpsc::channel(1024);
 
             let client_result = tokio::spawn(async move {
-                let mut client_read = client_read;
-                let mut client_write = client_write;
-                client_main(
-                    0,
-                    &mut client_read,
-                    &mut client_write,
-                    event_sender,
-                )
-                .await
+                client_main(0, client_read, client_write, event_sender).await
             });
 
             Fixture {

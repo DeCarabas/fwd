@@ -197,7 +197,7 @@ async fn client_handle_messages<T: AsyncRead + Unpin>(
                     // TODO: Log
                 }
             }
-            message => panic!("Unsupported: {:?}", message),
+            message => error!("Unsupported: {:?}", message),
         };
     }
 }

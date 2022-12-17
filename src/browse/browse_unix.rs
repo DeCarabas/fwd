@@ -8,6 +8,8 @@ use tokio::sync::mpsc;
 use users;
 use xdg;
 
+pub async fn browse_url_impl(_url: &String) {}
+
 pub async fn handle_browser_open_impl(
     messages: mpsc::Sender<Message>,
 ) -> Result<()> {

@@ -1,10 +1,10 @@
+use crate::browse::handle_browser_open;
 use crate::message::{Message, MessageReader, MessageWriter};
 use anyhow::Result;
 use log::{error, warn};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::mpsc;
 
-mod browser;
 mod refresh;
 
 // We drive writes through an mpsc queue, because we not only handle requests
@@ -82,7 +82,7 @@ async fn server_main<
     tokio::select! {
         _ = write_driver(&mut receiver, &mut writer) => Ok(()),
         r = server_loop(&mut reader, &mut sender) => r,
-        r = browser::handle_browser_open(browse_sender) => r,
+        r = handle_browser_open(browse_sender) => r,
     }
 }
 

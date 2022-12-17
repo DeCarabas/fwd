@@ -1,4 +1,4 @@
-use crate::message::{Message, MessageReader};
+use crate::message::{Message, MessageReader, MessageWriter};
 use anyhow::{bail, Context, Result};
 use log::warn;
 use std::os::unix::fs::DirBuilderExt;
@@ -8,7 +8,18 @@ use tokio::sync::mpsc;
 use users;
 use xdg;
 
-pub async fn browse_url_impl(_url: &String) {}
+pub async fn browse_url_impl(url: &String) -> Result<()> {
+    let path = socket_path().context("Error getting socket path")?;
+    let stream = UnixStream::connect(&path).await.context(
+        "Error connecting to socket (is fwd actually connected here?)",
+    )?;
+    let mut writer = MessageWriter::new(stream);
+    writer
+        .write(Message::Browse(url.clone()))
+        .await
+        .context("Error sending browse message")?;
+    Ok(())
+}
 
 pub async fn handle_browser_open_impl(
     messages: mpsc::Sender<Message>,

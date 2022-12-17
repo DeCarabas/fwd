@@ -10,13 +10,15 @@ use browse_unix::{browse_url_impl, handle_browser_open_impl};
 
 #[inline]
 pub async fn browse_url(url: &String) {
-    browse_url_impl(url).await
+    if let Err(e) = browse_url_impl(url).await {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    }
 }
 
 #[cfg(not(target_family = "unix"))]
-pub async fn browse_url_impl(url: &String) {
-    print!("Opening a browser is not supported on this platform\n");
-    std::process::exit(1);
+pub async fn browse_url_impl(url: &String) -> Result<()> {
+    anyhow!("Opening a browser is not supported on this platform")
 }
 
 #[inline]

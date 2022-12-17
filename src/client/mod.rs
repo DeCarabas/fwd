@@ -197,6 +197,10 @@ async fn client_handle_messages<T: AsyncRead + Unpin>(
                     // TODO: Log
                 }
             }
+            Browse(url) => {
+                // TODO: Uh, security?
+                _ = open::that(url);
+            }
             message => error!("Unsupported: {:?}", message),
         };
     }

@@ -504,3 +504,30 @@ impl Drop for UI {
         _ = self.leave_alternate_screen();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert_matches::assert_matches;
+
+    #[tokio::test]
+    async fn empty_ports() {
+        let (sender, receiver) = mpsc::channel(64);
+        let config = ServerConfig::default();
+        let mut ui = UI::new(receiver, config);
+
+        // There are ports...
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![PortDesc {
+            port: 8080,
+            desc: "my-service".to_string(),
+        }])));
+        ui.selection.select(Some(0));
+
+        // ...but now there are no ports!
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![])));
+        assert_eq!(ui.ports.len(), 0);
+        assert_matches!(ui.selection.selected(), None);
+
+        drop(sender);
+    }
+}

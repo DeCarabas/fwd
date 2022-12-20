@@ -15,6 +15,11 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
+    #[cfg(test)]
+    pub fn default() -> ServerConfig {
+        ServerConfig { auto: true, ports: HashMap::new() }
+    }
+
     pub fn contains_key(&self, port: u16) -> bool {
         self.ports.contains_key(&port)
     }

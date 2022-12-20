@@ -1,5 +1,5 @@
 use crate::message::Message;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use tokio::sync::mpsc;
 
 #[cfg(target_family = "unix")]
@@ -18,6 +18,7 @@ pub async fn browse_url(url: &String) {
 
 #[cfg(not(target_family = "unix"))]
 pub async fn browse_url_impl(_url: &String) -> Result<()> {
+    use anyhow::anyhow;
     Err(anyhow!(
         "Opening a browser is not supported on this platform"
     ))

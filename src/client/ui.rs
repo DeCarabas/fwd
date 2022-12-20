@@ -510,8 +510,8 @@ mod tests {
     use super::*;
     use assert_matches::assert_matches;
 
-    #[tokio::test]
-    async fn empty_ports() {
+    #[test]
+    fn empty_ports() {
         let (sender, receiver) = mpsc::channel(64);
         let config = ServerConfig::default();
         let mut ui = UI::new(receiver, config);
@@ -527,6 +527,77 @@ mod tests {
         ui.handle_internal_event(Some(UIEvent::Ports(vec![])));
         assert_eq!(ui.ports.len(), 0);
         assert_matches!(ui.selection.selected(), None);
+
+        drop(sender);
+    }
+
+    #[test]
+    fn port_change_selection() {
+        let (sender, receiver) = mpsc::channel(64);
+        let config = ServerConfig::default();
+        let mut ui = UI::new(receiver, config);
+
+        // There are ports...
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![
+            PortDesc {
+                port: 8080,
+                desc: "my-service".to_string(),
+            },
+            PortDesc {
+                port: 8081,
+                desc: "my-service".to_string(),
+            },
+        ])));
+        ui.selection.select(Some(1));
+
+        // ...but now there is one fewer port, selection should move.
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![PortDesc {
+            port: 8080,
+            desc: "my-service".to_string(),
+        }])));
+        assert_eq!(ui.ports.len(), 1);
+        assert_matches!(ui.selection.selected(), Some(0));
+
+        // Put it back but selection doesn't move
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![
+            PortDesc {
+                port: 8080,
+                desc: "my-service".to_string(),
+            },
+            PortDesc {
+                port: 8081,
+                desc: "my-service".to_string(),
+            },
+        ])));
+        assert_eq!(ui.ports.len(), 2);
+        assert_matches!(ui.selection.selected(), Some(0));
+
+        drop(sender);
+    }
+
+    #[test]
+    fn log_lines() {
+        let (sender, receiver) = mpsc::channel(64);
+        let config = ServerConfig::default();
+        let mut ui = UI::new(receiver, config);
+
+        // Client and server are all formatted right you know.
+        ui.handle_internal_event(Some(UIEvent::ServerLine("A".to_string())));
+        ui.handle_internal_event(Some(UIEvent::LogLine(
+            Level::Info,
+            "A".to_string(),
+        )));
+        assert_eq!(ui.lines.len(), 2);
+        assert_eq!(ui.lines[0], "[SERVER] A".to_string());
+        assert_eq!(ui.lines[1], "[CLIENT] A".to_string());
+
+        // Make sure we bound the log.
+        for _ in 1..2048 {
+            ui.handle_internal_event(Some(UIEvent::ServerLine(
+                "A".to_string(),
+            )));
+        }
+        assert_eq!(ui.lines.len(), 1024);
 
         drop(sender);
     }

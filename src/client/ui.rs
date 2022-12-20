@@ -399,7 +399,10 @@ impl UI {
                 KeyEvent { code: KeyCode::Down, .. }
                 | KeyEvent { code: KeyCode::Char('k'), .. } => {
                     let index = match self.selection.selected() {
-                        Some(i) => (i + 1).min(self.ports.len() - 1),
+                        Some(i) => {
+                            assert!(self.ports.len() > 0, "We must have ports because we have a selection.");
+                            (i + 1).min(self.ports.len() - 1)
+                        }
                         None => 0,
                     };
                     self.selection.select(Some(index));
@@ -466,11 +469,15 @@ impl UI {
                     }
                 }
 
-                let selected = match self.selection.selected() {
-                    Some(i) => i.min(self.ports.len() - 1),
-                    None => 0,
+                let selected = if self.ports.len() == 0 {
+                    None // No ports, no selection.
+                } else {
+                    match self.selection.selected() {
+                        Some(i) => Some(i.min(self.ports.len() - 1)),
+                        None => Some(0),
+                    }
                 };
-                self.selection.select(Some(selected));
+                self.selection.select(selected);
             }
             Some(UIEvent::ServerLine(line)) => {
                 while self.lines.len() >= 1024 {

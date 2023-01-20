@@ -87,19 +87,46 @@ jobs:
         toolchain: ${{ matrix.rust }}
         target: ${{ matrix.target }}
 
+    - name: Use Cross
+      shell: bash
+      run: |
+        cargo install cross
+        echo "CARGO=cross" >> $GITHUB_ENV
+        echo "TARGET_FLAGS=--target ${{ matrix.target }}" >> $GITHUB_ENV
+        echo "TARGET_DIR=./target/${{ matrix.target }}" >> $GITHUB_ENV
+
     - name: Build release binary
       run: ${{ env.CARGO }} build --verbose --release ${{ env.TARGET_FLAGS }}
 
     - name: Strip release binary (linux and macos)
       if: matrix.build == 'linux' || matrix.build == 'macos'
-      run: strip "target/${{ matrix.target }}/release/fwd"
+      run: |
+        strip "target/${{ matrix.target }}/release/fwd"
+        strip "target/${{ matrix.target }}/release/fwd-browse"
 
-    - name: Upload release assets
-      uses: actions/upload-release-asset@v1
+    - name: Build archive
+      shell: bash
+      run: |
+        staging="fwd-${{ needs.create-release.outputs.fwd_version }}-${{ matrix.target }}"
+        mkdir -p "$staging"
+
+        if [ "${{ matrix.os }}" = "windows-2022" ]; then
+          cp "target/${{ matrix.target }}/release/fwd.exe" "$staging/"
+          7z a "$staging.zip" "$staging"
+          echo "ASSET=$staging.zip" >> $GITHUB_ENV
+        else
+          cp "target/${{ matrix.target }}/release/fwd" "$staging/"
+          cp "target/${{ matrix.target }}/release/fwd-browse" "$staging/"
+          tar czf "$staging.tar.gz" "$staging"
+          echo "ASSET=$staging.tar.gz" >> $GITHUB_ENV
+        fi
+
+    - name: Upload release archive
+      uses: actions/upload-release-asset@v1.0.2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ needs.create_release.outputs.upload_url }}
-        asset_name: fwd-${{needs.create_release.outputs.fwd_version }}-${{ matrix.target }}
-        asset_path: "./target/${{ matrix.target }}/release/fwd"
+        asset_name: ${{ env.ASSET }}
+        asset_path: ${{ env.ASSET }}
         asset_content_type: application/octet-stream

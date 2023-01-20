@@ -77,29 +77,29 @@ jobs:
           rust: nightly
           target: x86_64-pc-windows-msvc
 
-      steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-          target: ${{ matrix.target }}
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ matrix.rust }}
+        target: ${{ matrix.target }}
 
-      - name: Build release binary
-        run: ${{ env.CARGO }} build --verbose --release ${{ env.TARGET_FLAGS }}
+    - name: Build release binary
+      run: ${{ env.CARGO }} build --verbose --release ${{ env.TARGET_FLAGS }}
 
-      - name: Strip release binary (linux and macos)
-        if: matrix.build == 'linux' || matrix.build == 'macos'
-        run: strip "target/${{ matrix.target }}/release/fwd"
+    - name: Strip release binary (linux and macos)
+      if: matrix.build == 'linux' || matrix.build == 'macos'
+      run: strip "target/${{ matrix.target }}/release/fwd"
 
-      - name: Upload release assets
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create_release.outputs.upload_url }}
-          asset_name: fwd-${{needs.create_release.outputs.fwd_version }}-${{ matrix.target }}
-          asset_path: "./target/${{ matrix.target }}/release/fwd"
-          asset_content_type: application/octet-stream
+    - name: Upload release assets
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create_release.outputs.upload_url }}
+        asset_name: fwd-${{needs.create_release.outputs.fwd_version }}-${{ matrix.target }}
+        asset_path: "./target/${{ matrix.target }}/release/fwd"
+        asset_content_type: application/octet-stream

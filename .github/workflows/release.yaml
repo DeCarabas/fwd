@@ -1,0 +1,105 @@
+# From https://github.com/BurntSushi/ripgrep/blob/master/.github/workflows/release.yml
+# Which is also via https://eugene-babichenko.github.io/blog/2020/05/09/github-actions-cross-platform-auto-releases/
+# ...both of which are very good.
+#
+# I'm sure I don't need half the stuff I have in here (around cargo
+# customization and whatnot) but.
+#
+name: release
+
+on:
+  push:
+    tags:
+    - "[0-9]+.[0-9]+.[0-9]+"
+
+jobs:
+  create_release:
+    name: Create release
+    runs-on: ubuntu-22.04
+
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      fwd_version: ${{ env.FWD_VERSION }}
+
+    steps:
+      - name: Get the release version from the tag
+        shell: bash
+        run: |
+          # Apparently, this is the right way to get a tag name. Really?
+          #
+          # See: https://github.community/t5/GitHub-Actions/How-to-get-just-the-tag-name/m-p/32167/highlight/true#M1027
+          echo "FWD_VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+          echo "version is: ${{ env.FWD_VERSION }}"
+
+      - name: Create GitHub release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.FWD_VERSION }}
+          release_name: ${{ env.FWD_VERSION }}
+
+  release_assets:
+    name: Release assets
+    needs: ['create_release']        # We need to know the upload URL
+    runs-on: ${{ matrix.config.os }} # We run many different builds
+    env:
+      # For some builds, we use cross to test on 32-bit and big-endian
+      # systems.
+      CARGO: cargo
+      # When CARGO is set to CROSS, this is set to `--target matrix.target`.
+      TARGET_FLAGS: ""
+      # When CARGO is set to CROSS, TARGET_DIR includes matrix.target.
+      TARGET_DIR: ./target
+      # Emit backtraces on panics.
+      RUST_BACKTRACE: 1
+      # Build static releases with PCRE2.
+      PCRE2_SYS_STATIC: 1
+
+    strategy:
+      # just an example matrix
+      matrix:
+        build: ['linux', 'macos', 'windows']
+        include:
+        - build: linux
+          os: ubuntu-22.04
+          rust: nightly
+          target: x86_64-unknown-linux-musl
+
+        - build: macos
+          os: macos-12
+          rust: nightly
+          target: x86_64-apple-darwin
+
+        - build: windows
+          os: windows-2022
+          rust: nightly
+          target: x86_64-pc-windows-msvc
+
+      steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          target: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: ${{ env.CARGO }} build --verbose --release ${{ env.TARGET_FLAGS }}
+
+      - name: Strip release binary (linux and macos)
+        if: matrix.build == 'linux' || matrix.build == 'macos'
+        run: strip "target/${{ matrix.target }}/release/fwd"
+
+      - name: Upload release assets
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create_release.outputs.upload_url }}
+          asset_name: fwd-${{needs.create_release.outputs.fwd_version }}-${{ matrix.target }}
+          asset_path: "./target/${{ matrix.target }}/release/fwd"
+          asset_content_type: application/octet-stream

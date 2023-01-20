@@ -19,26 +19,16 @@ jobs:
 
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
-      fwd_version: ${{ env.FWD_VERSION }}
 
     steps:
-      - name: Get the release version from the tag
-        shell: bash
-        run: |
-          # Apparently, this is the right way to get a tag name. Really?
-          #
-          # See: https://github.community/t5/GitHub-Actions/How-to-get-just-the-tag-name/m-p/32167/highlight/true#M1027
-          echo "FWD_VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
-          echo "version is: ${{ env.FWD_VERSION }}"
-
       - name: Create GitHub release
         id: create_release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ env.FWD_VERSION }}
-          release_name: ${{ env.FWD_VERSION }}
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
 
   release_assets:
     name: Release assets
@@ -107,7 +97,7 @@ jobs:
     - name: Build archive
       shell: bash
       run: |
-        staging="fwd-${{ needs.create-release.outputs.fwd_version }}-${{ matrix.target }}"
+        staging="fwd-${{ matrix.target }}"
         mkdir -p "$staging"
 
         if [ "${{ matrix.os }}" = "windows-2022" ]; then

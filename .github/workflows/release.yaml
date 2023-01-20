@@ -42,8 +42,8 @@ jobs:
 
   release_assets:
     name: Release assets
-    needs: ['create_release']        # We need to know the upload URL
-    runs-on: ${{ matrix.config.os }} # We run many different builds
+    needs: ['create_release'] # We need to know the upload URL
+    runs-on: ${{ matrix.os }} # We run many different builds
     env:
       # For some builds, we use cross to test on 32-bit and big-endian
       # systems.

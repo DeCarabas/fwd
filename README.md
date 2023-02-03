@@ -3,10 +3,10 @@
 A port-forwarding utility.
 
 Here's how it works:
-
-1. You install `fwd` on the server.
-2. You install `fwd` on the client.
-3. You run `fwd` on the client to connect to the server, like so:
+1. Get the latest [release](https://github.com/DeCarabas/fwd/releases) of `fwd`
+2. You install `fwd` on the server somewhere in your `$PATH` (like `/usr/bin/`)
+3. You install `fwd` on the client (like your laptop)
+4. You run `fwd` on the client to connect to the server, like so:
 
 ```bash
 doty@my.laptop$ fwd some.server

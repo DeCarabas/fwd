@@ -19,10 +19,11 @@ use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
 use tui::{
     backend::{Backend, CrosstermBackend},
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Style},
     widgets::{
-        Block, Borders, List, ListItem, ListState, Row, Table, TableState,
+        Block, Borders, Clear, List, ListItem, ListState, Paragraph, Row,
+        Table, TableState,
     },
     Frame, Terminal,
 };
@@ -148,6 +149,7 @@ pub struct UI {
     selection: TableState,
     running: bool,
     show_logs: bool,
+    show_help: bool,
     alternate_screen: bool,
     raw_mode: bool,
 }
@@ -160,6 +162,7 @@ impl UI {
             socks_port: None,
             running: true,
             show_logs: false,
+            show_help: false,
             selection: TableState::default(),
             lines: VecDeque::with_capacity(1024),
             config,
@@ -234,6 +237,9 @@ impl UI {
         if self.show_logs {
             self.render_logs(frame, chunks[1]);
         }
+        if self.show_help {
+            self.render_help(frame);
+        }
     }
 
     fn render_ports<B: Backend>(&mut self, frame: &mut Frame<B>, size: Rect) {
@@ -280,6 +286,60 @@ impl UI {
             .highlight_symbol(">> ");
 
         frame.render_stateful_widget(port_list, size, &mut self.selection);
+    }
+
+    fn render_help<B: Backend>(&mut self, frame: &mut Frame<B>) {
+        let keybindings = vec![
+            Row::new(vec!["↑ / k", "Move cursor up"]),
+            Row::new(vec!["↓ / j", "Move cursor down"]),
+            Row::new(vec!["e", "enable/disable forwarding"]),
+            Row::new(vec!["RET", "Open port in web browser"]),
+            Row::new(vec!["ESC / q", "exit"]),
+            Row::new(vec!["? / h", "Show this help text"]),
+            Row::new(vec!["l", "Show fwd's logs"]),
+        ];
+
+        let help_intro = 2;
+        let border_lines = 3;
+
+        let help_popup_area = centered_rect(
+            65,
+            keybindings.len() as u16 + help_intro + border_lines,
+            frame.size(),
+        );
+        let inner_area =
+            help_popup_area.inner(&Margin { vertical: 1, horizontal: 1 });
+
+        let constraints = vec![
+            Constraint::Length(help_intro),
+            Constraint::Length(inner_area.height - help_intro),
+        ];
+        let help_parts = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints)
+            .split(inner_area);
+
+        let keybindings = Table::new(keybindings)
+            .widths(&[Constraint::Length(7), Constraint::Length(40)])
+            .column_spacing(1)
+            .block(
+                Block::default().title("key bindings").borders(Borders::TOP),
+            );
+
+        let exp = Paragraph::new(
+            "fwd forwards all ports discovered on the target when it starts.",
+        );
+
+        // outer box
+        frame.render_widget(Clear, help_popup_area); //this clears out the background
+        let helpbox = Block::default().title("help").borders(Borders::ALL);
+        frame.render_widget(helpbox, help_popup_area);
+
+        // explanation
+        frame.render_widget(exp, help_parts[0]);
+
+        // keybindings
+        frame.render_widget(keybindings, help_parts[1]);
     }
 
     fn render_logs<B: Backend>(&mut self, frame: &mut Frame<B>, size: Rect) {
@@ -376,7 +436,17 @@ impl UI {
                 }
                 KeyEvent { code: KeyCode::Esc, .. }
                 | KeyEvent { code: KeyCode::Char('q'), .. } => {
-                    self.running = false;
+                    // it's natural to press q to get out of a help screen, so
+                    // don't shut down if users do ?q
+                    if self.show_help {
+                        self.show_help = false;
+                    } else {
+                        self.running = false;
+                    }
+                }
+                KeyEvent { code: KeyCode::Char('?'), .. }
+                | KeyEvent { code: KeyCode::Char('h'), .. } => {
+                    self.show_help = !self.show_help;
                 }
                 KeyEvent { code: KeyCode::Char('l'), .. } => {
                     self.show_logs = !self.show_logs;
@@ -508,6 +578,40 @@ impl Drop for UI {
         _ = self.disable_raw_mode();
         _ = self.leave_alternate_screen();
     }
+}
+
+/// helper function to create a centered rect using up certain percentage of the available rect `r`
+fn centered_rect(width_chars: u16, height_chars: u16, r: Rect) -> Rect {
+    let height_percent =
+        (height_chars as f64 / r.height as f64 * 100.0).ceil() as u16;
+    let height_diff = (100 - height_percent) / 2;
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(
+            [
+                Constraint::Percentage(height_diff),
+                Constraint::Percentage(height_percent),
+                Constraint::Percentage(height_diff),
+            ]
+            .as_ref(),
+        )
+        .split(r);
+
+    let width_percent =
+        (width_chars as f64 / r.width as f64 * 100.0).ceil() as u16;
+    let width_diff = (100 - width_percent) / 2;
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(
+            [
+                Constraint::Percentage(width_diff),
+                Constraint::Percentage(width_percent),
+                Constraint::Percentage(width_diff),
+            ]
+            .as_ref(),
+        )
+        .split(popup_layout[1])[1]
 }
 
 #[cfg(test)]

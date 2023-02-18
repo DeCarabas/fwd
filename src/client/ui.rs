@@ -383,7 +383,7 @@ impl UI {
                     }
                 }
                 KeyEvent { code: KeyCode::Up, .. }
-                | KeyEvent { code: KeyCode::Char('j'), .. } => {
+                | KeyEvent { code: KeyCode::Char('k'), .. } => {
                     let index = match self.selection.selected() {
                         Some(i) => {
                             if i == 0 {
@@ -397,7 +397,7 @@ impl UI {
                     self.selection.select(Some(index));
                 }
                 KeyEvent { code: KeyCode::Down, .. }
-                | KeyEvent { code: KeyCode::Char('k'), .. } => {
+                | KeyEvent { code: KeyCode::Char('j'), .. } => {
                     let index = match self.selection.selected() {
                         Some(i) => {
                             assert!(self.ports.len() > 0, "We must have ports because we have a selection.");

@@ -248,6 +248,7 @@ impl UI {
             let listener = self.ports.get(&port).unwrap();
             rows.push(
                 Row::new(vec![
+                    if listener.enabled { " ✓ " } else { "" },
                     &port_strings[index][..],
                     match &listener.desc {
                         Some(port_desc) => &port_desc.desc,
@@ -265,11 +266,14 @@ impl UI {
         // TODO: I don't know how to express the lengths I want here.
         //       That last length is extremely wrong but guaranteed to work I
         //       guess.
-        let widths =
-            vec![Constraint::Length(5), Constraint::Length(size.width)];
+        let widths = vec![
+            Constraint::Length(3),
+            Constraint::Length(5),
+            Constraint::Length(size.width),
+        ];
 
         let port_list = Table::new(rows)
-            .header(Row::new(vec!["Port", "Description"]))
+            .header(Row::new(vec!["fwd", "Port", "Description"]))
             .block(Block::default().title("Ports").borders(Borders::ALL))
             .column_spacing(1)
             .widths(&widths)

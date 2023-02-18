@@ -387,7 +387,7 @@ impl UI {
                     let index = match self.selection.selected() {
                         Some(i) => {
                             if i == 0 {
-                                0
+                                self.ports.len() - 1
                             } else {
                                 i - 1
                             }
@@ -400,8 +400,12 @@ impl UI {
                 | KeyEvent { code: KeyCode::Char('j'), .. } => {
                     let index = match self.selection.selected() {
                         Some(i) => {
-                            assert!(self.ports.len() > 0, "We must have ports because we have a selection.");
-                            (i + 1).min(self.ports.len() - 1)
+                            let max = self.ports.len() - 1;
+                            if i >= max {
+                                0
+                            } else {
+                                i + 1
+                            }
                         }
                         None => 0,
                     };

@@ -292,14 +292,14 @@ impl UI {
         let keybindings = vec![
             Row::new(vec!["↑ / k", "Move cursor up"]),
             Row::new(vec!["↓ / j", "Move cursor down"]),
-            Row::new(vec!["e", "enable/disable forwarding"]),
+            Row::new(vec!["e", "Enable/disable forwarding"]),
             Row::new(vec!["RET", "Open port in web browser"]),
-            Row::new(vec!["ESC / q", "exit"]),
+            Row::new(vec!["ESC / q", "Quit"]),
             Row::new(vec!["? / h", "Show this help text"]),
             Row::new(vec!["l", "Show fwd's logs"]),
         ];
 
-        let help_intro = 2;
+        let help_intro = 4;
         let border_lines = 3;
 
         let help_popup_area = centered_rect(
@@ -322,17 +322,15 @@ impl UI {
         let keybindings = Table::new(keybindings)
             .widths(&[Constraint::Length(7), Constraint::Length(40)])
             .column_spacing(1)
-            .block(
-                Block::default().title("key bindings").borders(Borders::TOP),
-            );
+            .block(Block::default().title("Keys").borders(Borders::TOP));
 
         let exp = Paragraph::new(
-            "fwd forwards all ports discovered on the target when it starts.",
+            "fwd automatically listens for connections on the same ports\nas the target, and forwards connections on those ports to the\ntarget.",
         );
 
         // outer box
         frame.render_widget(Clear, help_popup_area); //this clears out the background
-        let helpbox = Block::default().title("help").borders(Borders::ALL);
+        let helpbox = Block::default().title("Help").borders(Borders::ALL);
         frame.render_widget(helpbox, help_popup_area);
 
         // explanation
@@ -427,6 +425,37 @@ impl UI {
         &mut self,
         ev: Option<Result<Event, std::io::Error>>,
     ) {
+        if self.show_help {
+            self.handle_console_event_help(ev)
+        } else {
+            self.handle_console_event_main(ev)
+        }
+    }
+
+    fn handle_console_event_help(
+        &mut self,
+        ev: Option<Result<Event, std::io::Error>>,
+    ) {
+        match ev {
+            Some(Ok(Event::Key(ev))) => match ev {
+                KeyEvent { code: KeyCode::Esc, .. }
+                | KeyEvent { code: KeyCode::Char('q'), .. }
+                | KeyEvent { code: KeyCode::Char('?'), .. }
+                | KeyEvent { code: KeyCode::Char('h'), .. } => {
+                    self.show_help = false;
+                }
+                _ => (),
+            },
+            Some(Ok(_)) => (), // Don't care about this event...
+            Some(Err(_)) => (), // Hmmmmmm.....?
+            None => (),        // ....no events? what?
+        }
+    }
+
+    fn handle_console_event_main(
+        &mut self,
+        ev: Option<Result<Event, std::io::Error>>,
+    ) {
         match ev {
             Some(Ok(Event::Key(ev))) => match ev {
                 KeyEvent { code: KeyCode::Char('c'), .. } => {
@@ -436,13 +465,7 @@ impl UI {
                 }
                 KeyEvent { code: KeyCode::Esc, .. }
                 | KeyEvent { code: KeyCode::Char('q'), .. } => {
-                    // it's natural to press q to get out of a help screen, so
-                    // don't shut down if users do ?q
-                    if self.show_help {
-                        self.show_help = false;
-                    } else {
-                        self.running = false;
-                    }
+                    self.running = false;
                 }
                 KeyEvent { code: KeyCode::Char('?'), .. }
                 | KeyEvent { code: KeyCode::Char('h'), .. } => {

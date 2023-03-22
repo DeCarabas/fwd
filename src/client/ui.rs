@@ -582,36 +582,24 @@ impl Drop for UI {
 
 /// helper function to create a centered rect using up certain percentage of the available rect `r`
 fn centered_rect(width_chars: u16, height_chars: u16, r: Rect) -> Rect {
-    let height_percent =
-        (height_chars as f64 / r.height as f64 * 100.0).ceil() as u16;
-    let height_diff = (100 - height_percent) / 2;
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(
-            [
-                Constraint::Percentage(height_diff),
-                Constraint::Percentage(height_percent),
-                Constraint::Percentage(height_diff),
-            ]
-            .as_ref(),
-        )
-        .split(r);
+    let left = r.left()
+        + if width_chars > r.width {
+            0
+        } else {
+            (r.width - width_chars) / 2
+        };
 
-    let width_percent =
-        (width_chars as f64 / r.width as f64 * 100.0).ceil() as u16;
-    let width_diff = (100 - width_percent) / 2;
+    let top = r.top()
+        + if height_chars > r.height {
+            0
+        } else {
+            (r.height - height_chars) / 2
+        };
 
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(
-            [
-                Constraint::Percentage(width_diff),
-                Constraint::Percentage(width_percent),
-                Constraint::Percentage(width_diff),
-            ]
-            .as_ref(),
-        )
-        .split(popup_layout[1])[1]
+    let width = width_chars.min(r.width);
+    let height = height_chars.min(r.height);
+
+    Rect::new(left, top, width, height)
 }
 
 #[cfg(test)]
@@ -776,5 +764,32 @@ mod tests {
         assert_eq!(ui.lines.len(), 1024);
 
         drop(sender);
+    }
+
+    #[test]
+    fn test_centered_rect() {
+        // Normal old centering.
+        let frame = Rect::new(0, 0, 128, 128);
+        let centered = centered_rect(10, 10, frame);
+        assert_eq!(centered.left(), (128 - centered.width) / 2);
+        assert_eq!(centered.top(), (128 - centered.height) / 2);
+        assert_eq!(centered.width, 10);
+        assert_eq!(centered.height, 10);
+
+        // Clip the width and height to the box
+        let frame = Rect::new(0, 0, 5, 5);
+        let centered = centered_rect(10, 10, frame);
+        assert_eq!(centered.left(), 0);
+        assert_eq!(centered.top(), 0);
+        assert_eq!(centered.width, 5);
+        assert_eq!(centered.height, 5);
+
+        // Deal with non zero-zero origins.
+        let frame = Rect::new(10, 10, 128, 128);
+        let centered = centered_rect(10, 10, frame);
+        assert_eq!(centered.left(), 10 + (128 - centered.width) / 2);
+        assert_eq!(centered.top(), 10 + (128 - centered.height) / 2);
+        assert_eq!(centered.width, 10);
+        assert_eq!(centered.height, 10);
     }
 }

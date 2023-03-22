@@ -573,6 +573,73 @@ mod tests {
         assert_eq!(ui.ports.len(), 2);
         assert_matches!(ui.selection.selected(), Some(0));
 
+        // Move selection up => wraps around the length
+        ui.handle_console_event(Some(Ok(Event::Key(KeyEvent::new(
+            KeyCode::Up,
+            KeyModifiers::empty(),
+        )))));
+        assert_matches!(ui.selection.selected(), Some(1));
+        ui.handle_console_event(Some(Ok(Event::Key(KeyEvent::new(
+            KeyCode::Up,
+            KeyModifiers::empty(),
+        )))));
+        assert_matches!(ui.selection.selected(), Some(0));
+        ui.handle_console_event(Some(Ok(Event::Key(KeyEvent::new(
+            KeyCode::Up,
+            KeyModifiers::empty(),
+        )))));
+        assert_matches!(ui.selection.selected(), Some(1));
+
+        // Move selection down => wraps around the length
+        ui.handle_console_event(Some(Ok(Event::Key(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::empty(),
+        )))));
+        assert_matches!(ui.selection.selected(), Some(0));
+        ui.handle_console_event(Some(Ok(Event::Key(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::empty(),
+        )))));
+        assert_matches!(ui.selection.selected(), Some(1));
+        ui.handle_console_event(Some(Ok(Event::Key(KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::empty(),
+        )))));
+        assert_matches!(ui.selection.selected(), Some(0));
+
+        // J and K move the correct direction
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![
+            PortDesc {
+                port: 8080,
+                desc: "my-service".to_string(),
+            },
+            PortDesc {
+                port: 8081,
+                desc: "my-service".to_string(),
+            },
+            PortDesc {
+                port: 8082,
+                desc: "my-service".to_string(),
+            },
+        ])));
+        assert_eq!(ui.ports.len(), 3);
+
+        // J is down
+        ui.selection.select(Some(1));
+        ui.handle_console_event(Some(Ok(Event::Key(KeyEvent::new(
+            KeyCode::Char('j'),
+            KeyModifiers::empty(),
+        )))));
+        assert_matches!(ui.selection.selected(), Some(2));
+
+        // K is up
+        ui.selection.select(Some(1));
+        ui.handle_console_event(Some(Ok(Event::Key(KeyEvent::new(
+            KeyCode::Char('k'),
+            KeyModifiers::empty(),
+        )))));
+        assert_matches!(ui.selection.selected(), Some(0));
+
         drop(sender);
     }
 

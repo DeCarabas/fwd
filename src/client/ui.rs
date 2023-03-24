@@ -537,6 +537,9 @@ impl UI {
                 let mut leftover_ports: HashSet<u16> =
                     HashSet::from_iter(self.ports.keys().copied());
 
+                // Grab the selected port
+                let selected_port = self.get_selected_port();
+
                 for port_desc in p.into_iter() {
                     leftover_ports.remove(&port_desc.port);
                     if let Some(listener) = self.ports.get_mut(&port_desc.port)
@@ -567,14 +570,16 @@ impl UI {
                     }
                 }
 
-                let selected = if self.ports.len() == 0 {
-                    None // No ports, no selection.
-                } else {
-                    match self.selection.selected() {
-                        Some(i) => Some(i.min(self.ports.len() - 1)),
-                        None => Some(0),
+                let selected = match selected_port {
+                    Some(port) => {
+                        match self.get_ui_ports().binary_search(&port) {
+                            Ok(index) => Some(index),
+                            Err(_) => None,
+                        }
                     }
+                    None => None,
                 };
+
                 self.selection.select(selected);
             }
             Some(UIEvent::ServerLine(line)) => {
@@ -670,15 +675,15 @@ mod tests {
         ])));
         ui.selection.select(Some(1));
 
-        // ...but now there is one fewer port, selection should move.
+        // ...but now the port I had selected goes away, my selection should clear.
         ui.handle_internal_event(Some(UIEvent::Ports(vec![PortDesc {
             port: 8080,
             desc: "my-service".to_string(),
         }])));
         assert_eq!(ui.ports.len(), 1);
-        assert_matches!(ui.selection.selected(), Some(0));
+        assert_matches!(ui.selection.selected(), None);
 
-        // Put it back but selection doesn't move
+        // Put it back but we don't re-select it. (Sorry bro?)
         ui.handle_internal_event(Some(UIEvent::Ports(vec![
             PortDesc {
                 port: 8080,
@@ -690,9 +695,85 @@ mod tests {
             },
         ])));
         assert_eq!(ui.ports.len(), 2);
+        assert_matches!(ui.selection.selected(), None);
+
+        // Now, there are ports...
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![
+            PortDesc {
+                port: 8080,
+                desc: "my-service".to_string(),
+            },
+            PortDesc {
+                port: 8081,
+                desc: "my-service".to_string(),
+            },
+            PortDesc {
+                port: 8082,
+                desc: "my-service".to_string(),
+            },
+        ])));
+
+        // Select the middle one.
+        ui.selection.select(Some(1));
+
+        // Drop the first one, the selection should move up.
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![
+            PortDesc {
+                port: 8081,
+                desc: "my-service".to_string(),
+            },
+            PortDesc {
+                port: 8082,
+                desc: "my-service".to_string(),
+            },
+        ])));
         assert_matches!(ui.selection.selected(), Some(0));
 
+        // Insert two at the top, it should move down.
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![
+            PortDesc {
+                port: 8079,
+                desc: "my-service".to_string(),
+            },
+            PortDesc {
+                port: 8080,
+                desc: "my-service".to_string(),
+            },
+            PortDesc {
+                port: 8081,
+                desc: "my-service".to_string(),
+            },
+            PortDesc {
+                port: 8082,
+                desc: "my-service".to_string(),
+            },
+        ])));
+        assert_matches!(ui.selection.selected(), Some(2));
+
+        drop(sender);
+    }
+
+    #[test]
+    fn port_selection_wrapping() {
+        let (sender, receiver) = mpsc::channel(64);
+        let config = ServerConfig::default();
+        let mut ui = UI::new(receiver, config);
+
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![
+            PortDesc {
+                port: 8080,
+                desc: "my-service".to_string(),
+            },
+            PortDesc {
+                port: 8081,
+                desc: "my-service".to_string(),
+            },
+        ])));
+        assert_eq!(ui.ports.len(), 2);
+        assert_matches!(ui.selection.selected(), None);
+
         // Move selection up => wraps around the length
+        ui.selection.select(Some(0));
         ui.handle_console_event(Some(Ok(Event::Key(KeyEvent::new(
             KeyCode::Up,
             KeyModifiers::empty(),

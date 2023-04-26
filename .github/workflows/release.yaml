@@ -29,6 +29,7 @@ jobs:
         with:
           tag_name: ${{ github.ref }}
           release_name: Release ${{ github.ref }}
+          draft: true
 
   release_assets:
     name: Release assets

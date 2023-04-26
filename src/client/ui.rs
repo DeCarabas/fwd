@@ -292,8 +292,11 @@ impl UI {
         let keybindings = vec![
             Row::new(vec!["↑ / k", "Move cursor up"]),
             Row::new(vec!["↓ / j", "Move cursor down"]),
-            Row::new(vec!["e", "Enable/disable forwarding"]),
-            Row::new(vec!["RET", "Open port in web browser"]),
+            Row::new(vec![
+                "e",
+                "Enable/disable forwarding for the selected port",
+            ]),
+            Row::new(vec!["RET", "Open the selected port in web browser"]),
             Row::new(vec!["ESC / q", "Quit"]),
             Row::new(vec!["? / h", "Show this help text"]),
             Row::new(vec!["l", "Show fwd's logs"]),
@@ -309,6 +312,8 @@ impl UI {
         );
         let inner_area =
             help_popup_area.inner(&Margin { vertical: 1, horizontal: 1 });
+        let key_width = 7;
+        let binding_width = inner_area.width.saturating_sub(key_width);
 
         let constraints = vec![
             Constraint::Length(help_intro),
@@ -319,8 +324,12 @@ impl UI {
             .constraints(constraints)
             .split(inner_area);
 
+        let keybindings_widths = &[
+            Constraint::Length(key_width),
+            Constraint::Length(binding_width),
+        ];
         let keybindings = Table::new(keybindings)
-            .widths(&[Constraint::Length(7), Constraint::Length(40)])
+            .widths(keybindings_widths)
             .column_spacing(1)
             .block(Block::default().title("Keys").borders(Borders::TOP));
 

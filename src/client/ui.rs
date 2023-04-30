@@ -22,8 +22,7 @@ use tui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Style},
     widgets::{
-        Block, Borders, Clear, List, ListItem, ListState, Paragraph, Row,
-        Table, TableState,
+        Block, Borders, List, ListItem, ListState, Row, Table, TableState,
     },
     Frame, Terminal,
 };
@@ -302,27 +301,17 @@ impl UI {
             Row::new(vec!["l", "Show fwd's logs"]),
         ];
 
-        let help_intro = 4;
         let border_lines = 3;
 
         let help_popup_area = centered_rect(
             65,
-            keybindings.len() as u16 + help_intro + border_lines,
+            keybindings.len() as u16 + border_lines,
             frame.size(),
         );
         let inner_area =
             help_popup_area.inner(&Margin { vertical: 1, horizontal: 1 });
         let key_width = 7;
         let binding_width = inner_area.width.saturating_sub(key_width);
-
-        let constraints = vec![
-            Constraint::Length(help_intro),
-            Constraint::Length(inner_area.height - help_intro),
-        ];
-        let help_parts = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(constraints)
-            .split(inner_area);
 
         let keybindings_widths = &[
             Constraint::Length(key_width),
@@ -331,22 +320,10 @@ impl UI {
         let keybindings = Table::new(keybindings)
             .widths(keybindings_widths)
             .column_spacing(1)
-            .block(Block::default().title("Keys").borders(Borders::TOP));
-
-        let exp = Paragraph::new(
-            "fwd automatically listens for connections on the same ports\nas the target, and forwards connections on those ports to the\ntarget.",
-        );
-
-        // outer box
-        frame.render_widget(Clear, help_popup_area); //this clears out the background
-        let helpbox = Block::default().title("Help").borders(Borders::ALL);
-        frame.render_widget(helpbox, help_popup_area);
-
-        // explanation
-        frame.render_widget(exp, help_parts[0]);
+            .block(Block::default().title("Keys").borders(Borders::ALL));
 
         // keybindings
-        frame.render_widget(keybindings, help_parts[1]);
+        frame.render_widget(keybindings, inner_area);
     }
 
     fn render_logs<B: Backend>(&mut self, frame: &mut Frame<B>, size: Rect) {

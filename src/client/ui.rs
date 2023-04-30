@@ -471,25 +471,37 @@ impl UI {
                         Some(i) => {
                             assert!(self.ports.len() > 0, "We must have ports because we have a selection.");
                             if i == 0 {
-                                self.ports.len() - 1
+                                Some(self.ports.len() - 1)
                             } else {
-                                i - 1
+                                Some(i - 1)
                             }
                         }
-                        None => 0,
+                        None => {
+                            if self.ports.len() > 0 {
+                                Some(0)
+                            } else {
+                                None
+                            }
+                        }
                     };
-                    self.selection.select(Some(index));
+                    self.selection.select(index);
                 }
                 KeyEvent { code: KeyCode::Down, .. }
                 | KeyEvent { code: KeyCode::Char('j'), .. } => {
                     let index = match self.selection.selected() {
                         Some(i) => {
                             assert!(self.ports.len() > 0, "We must have ports because we have a selection.");
-                            (i + 1) % self.ports.len()
+                            Some((i + 1) % self.ports.len())
                         }
-                        None => 0,
+                        None => {
+                            if self.ports.len() > 0 {
+                                Some(0)
+                            } else {
+                                None
+                            }
+                        }
                     };
-                    self.selection.select(Some(index));
+                    self.selection.select(index);
                 }
                 KeyEvent { code: KeyCode::Enter, .. } => {
                     if let Some(p) = self.get_selected_port() {

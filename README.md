@@ -21,3 +21,9 @@ If the port is something that might be interesting to a web browser, you can pre
 If something is going wrong, pressing `l` will toggle logs that might explain it.
 
 Press `q` to quit.
+
+## Future Improvements:
+
+- Clipboard integration: send something from the remote end of the pipe to the host's clipboard. (Sometimes you *really* want to copy some big buffer from the remote side and your terminal just can't make that work.)
+
+- Client heartbeats: I frequently wind up in a situation where the pipe is stalled: not broken but nothing is getting through. (This happens with my coder.com pipes all the time.)

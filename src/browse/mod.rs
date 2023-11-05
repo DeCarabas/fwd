@@ -11,7 +11,7 @@ use browse_unix::{browse_url_impl, handle_browser_open_impl};
 #[inline]
 pub async fn browse_url(url: &String) {
     if let Err(e) = browse_url_impl(url).await {
-        eprintln!("{}", e);
+        eprintln!("{e}\nStart a fwd session to open: {url}");
         std::process::exit(1);
     }
 }
@@ -20,7 +20,8 @@ pub async fn browse_url(url: &String) {
 pub async fn browse_url_impl(_url: &String) -> Result<()> {
     use anyhow::anyhow;
     Err(anyhow!(
-        "Opening a browser is not supported on this platform"
+        "Opening a browser is not supported on this platform.\n\
+         Unable to open: {url}"
     ))
 }
 

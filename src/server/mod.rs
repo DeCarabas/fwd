@@ -14,13 +14,8 @@ async fn write_driver<Writer: AsyncWrite + Unpin>(
     messages: &mut mpsc::Receiver<Message>,
     writer: &mut MessageWriter<Writer>,
 ) -> () {
-    loop {
-        match messages.recv().await {
-            Some(m) => {
-                writer.write(m).await.expect("Failed to write the message")
-            }
-            None => break,
-        }
+    while let Some(m) = messages.recv().await {
+        writer.write(m).await.expect("Failed to write the message")
     }
 }
 

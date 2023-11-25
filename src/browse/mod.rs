@@ -11,6 +11,7 @@ use browse_unix::{browse_url_impl, handle_browser_open_impl};
 #[inline]
 pub async fn browse_url(url: &String) {
     if let Err(e) = browse_url_impl(url).await {
+        eprintln!("Unable to open {url}");
         eprintln!("{}", e);
         std::process::exit(1);
     }

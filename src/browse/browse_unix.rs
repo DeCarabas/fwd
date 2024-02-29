@@ -10,9 +10,12 @@ use xdg;
 
 pub async fn browse_url_impl(url: &String) -> Result<()> {
     let path = socket_path().context("Error getting socket path")?;
-    let stream = UnixStream::connect(&path).await.context(
-        "Error connecting to socket (is fwd actually connected here?)",
-    )?;
+    let stream = match UnixStream::connect(&path).await {
+        Ok(s) => s,
+        Err(e) => bail!(
+            "Error connecting to socket: {e} (is fwd actually connected here?)"
+        ),
+    };
     let mut writer = MessageWriter::new(stream);
     writer
         .write(Message::Browse(url.clone()))

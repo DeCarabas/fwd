@@ -10,7 +10,6 @@ use crossterm::{
     },
 };
 use log::{error, info, Level, Metadata, Record};
-use open;
 use std::collections::vec_deque::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::io::stdout;
@@ -334,7 +333,7 @@ impl UI {
             .block(Block::default().title("Log").borders(Borders::ALL));
 
         let mut list_state = ListState::default();
-        list_state.select(if self.lines.len() > 0 {
+        list_state.select(if !self.lines.is_empty() {
             Some(self.lines.len() - 1)
         } else {
             None
@@ -344,10 +343,7 @@ impl UI {
     }
 
     fn connected(&self) -> bool {
-        match self.socks_port {
-            Some(_) => true,
-            None => false,
-        }
+        self.socks_port.is_some()
     }
 
     fn get_ui_ports(&self) -> Vec<u16> {
@@ -469,7 +465,7 @@ impl UI {
                 | KeyEvent { code: KeyCode::Char('k'), .. } => {
                     let index = match self.selection.selected() {
                         Some(i) => {
-                            assert!(self.ports.len() > 0, "We must have ports because we have a selection.");
+                            assert!(!self.ports.is_empty(), "We must have ports because we have a selection.");
                             if i == 0 {
                                 Some(self.ports.len() - 1)
                             } else {
@@ -477,7 +473,7 @@ impl UI {
                             }
                         }
                         None => {
-                            if self.ports.len() > 0 {
+                            if !self.ports.is_empty() {
                                 Some(0)
                             } else {
                                 None
@@ -490,11 +486,11 @@ impl UI {
                 | KeyEvent { code: KeyCode::Char('j'), .. } => {
                     let index = match self.selection.selected() {
                         Some(i) => {
-                            assert!(self.ports.len() > 0, "We must have ports because we have a selection.");
+                            assert!(!self.ports.is_empty(), "We must have ports because we have a selection.");
                             Some((i + 1) % self.ports.len())
                         }
                         None => {
-                            if self.ports.len() > 0 {
+                            if !self.ports.is_empty() {
                                 Some(0)
                             } else {
                                 None
@@ -606,7 +602,8 @@ impl Drop for UI {
     }
 }
 
-/// helper function to create a centered rect using up certain percentage of the available rect `r`
+/// helper function to create a centered rect using up certain percentage of
+/// the available rect `r`
 fn centered_rect(width_chars: u16, height_chars: u16, r: Rect) -> Rect {
     let left = r.left()
         + if width_chars > r.width {

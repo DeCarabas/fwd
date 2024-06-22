@@ -1,14 +1,15 @@
-use crate::message::{Message, MessageReader, MessageWriter};
+// The reverse client connects to the server via a local connection to send
+// commands back to the client.
 use anyhow::{bail, Context, Result};
 use log::warn;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::PathBuf;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
-use users;
-use xdg;
 
-pub async fn browse_url_impl(url: &String) -> Result<()> {
+use crate::message::{Message, MessageReader, MessageWriter};
+
+pub async fn send_reverse_message(message: Message) -> Result<()> {
     let path = socket_path().context("Error getting socket path")?;
     let stream = match UnixStream::connect(&path).await {
         Ok(s) => s,
@@ -18,38 +19,22 @@ pub async fn browse_url_impl(url: &String) -> Result<()> {
     };
     let mut writer = MessageWriter::new(stream);
     writer
-        .write(Message::Browse(url.clone()))
+        .write(message)
         .await
         .context("Error sending browse message")?;
     Ok(())
 }
 
-pub async fn handle_browser_open_impl(
-    messages: mpsc::Sender<Message>,
-) -> Result<()> {
-    let path = socket_path().context("Error getting socket path")?;
-    handle_browser_open_with_path(messages, path).await
-}
-
-async fn handle_browser_open_with_path(
-    messages: mpsc::Sender<Message>,
-    path: PathBuf,
-) -> Result<()> {
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)
-        .with_context(|| format!("Failed to bind to {}", path.display()))?;
-    loop {
-        let (socket, _addr) = listener
-            .accept()
-            .await
-            .context("Error accepting connection")?;
-
-        let sender = messages.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle_connection(socket, sender).await {
-                warn!("Error handling socket connection: {:?}", e);
-            }
-        });
+fn socket_directory() -> Result<std::path::PathBuf> {
+    let base_directories = xdg::BaseDirectories::new()
+        .context("Error creating BaseDirectories")?;
+    match base_directories.place_runtime_file("fwd") {
+        Ok(path) => Ok(path),
+        Err(_) => {
+            let mut path = std::env::temp_dir();
+            path.push(format!("fwd{}", users::get_current_uid()));
+            Ok(path)
+        }
     }
 }
 
@@ -68,16 +53,32 @@ pub fn socket_path() -> Result<PathBuf> {
     Ok(socket_path)
 }
 
-fn socket_directory() -> Result<std::path::PathBuf> {
-    let base_directories = xdg::BaseDirectories::new()
-        .context("Error creating BaseDirectories")?;
-    match base_directories.place_runtime_file("fwd") {
-        Ok(path) => Ok(path),
-        Err(_) => {
-            let mut path = std::env::temp_dir();
-            path.push(format!("fwd{}", users::get_current_uid()));
-            Ok(path)
-        }
+pub async fn handle_reverse_connections(
+    messages: mpsc::Sender<Message>,
+) -> Result<()> {
+    let path = socket_path().context("Error getting socket path")?;
+    handle_reverse_connections_with_path(messages, path).await
+}
+
+async fn handle_reverse_connections_with_path(
+    messages: mpsc::Sender<Message>,
+    path: PathBuf,
+) -> Result<()> {
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path)
+        .with_context(|| format!("Failed to bind to {}", path.display()))?;
+    loop {
+        let (socket, _addr) = listener
+            .accept()
+            .await
+            .context("Error accepting connection")?;
+
+        let sender = messages.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handle_connection(socket, sender).await {
+                warn!("Error handling socket connection: {:?}", e);
+            }
+        });
     }
 }
 
@@ -119,7 +120,7 @@ mod tests {
 
         let path_override = path.clone();
         tokio::spawn(async move {
-            handle_browser_open_with_path(sender, path_override)
+            handle_reverse_connections_with_path(sender, path_override)
                 .await
                 .expect("Error in server!");
         });

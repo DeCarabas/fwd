@@ -1,5 +1,5 @@
-use crate::browse::handle_browser_open;
 use crate::message::{Message, MessageReader, MessageWriter};
+use crate::reverse::handle_reverse_connections;
 use anyhow::Result;
 use log::{error, warn};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
@@ -13,7 +13,7 @@ mod refresh;
 async fn write_driver<Writer: AsyncWrite + Unpin>(
     messages: &mut mpsc::Receiver<Message>,
     writer: &mut MessageWriter<Writer>,
-) -> () {
+) {
     while let Some(m) = messages.recv().await {
         writer.write(m).await.expect("Failed to write the message")
     }
@@ -77,7 +77,7 @@ async fn server_main<
     tokio::select! {
         _ = write_driver(&mut receiver, &mut writer) => Ok(()),
         r = server_loop(&mut reader, &mut sender) => r,
-        r = handle_browser_open(browse_sender) => r,
+        r = handle_reverse_connections(browse_sender) => r,
     }
 }
 

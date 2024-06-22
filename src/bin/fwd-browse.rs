@@ -9,5 +9,10 @@ async fn main() {
         std::process::exit(1);
     }
 
-    fwd::browse_url(&args[1]).await;
+    let url = &args[1];
+    if let Err(e) = fwd::browse_url(url).await {
+        eprintln!("Unable to open {url}");
+        eprintln!("{}", e);
+        std::process::exit(1);
+    }
 }

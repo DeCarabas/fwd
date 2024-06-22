@@ -5,7 +5,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn usage() {
     println!(indoc! {"
-usage: fwd [options] (<server> | browse <url>)
+usage: fwd [options] (<server> | browse <url> | clip [<file>])
 
 To connect a client to a server that has an `fwd` installed in its path, run
 `fwd <server>` on the client, where <server> is the name of the server to
@@ -60,9 +60,13 @@ fn parse_args(args: Vec<String>) -> Args {
         } else {
             Args::Error
         }
-    } else if rest.len() > 1 && rest[0] == "browse" {
-        if rest.len() == 2 {
-            Args::Browse(rest[1].to_string())
+    } else if rest.len() > 1 {
+        if rest[0] == "browse" {
+            if rest.len() == 2 {
+                Args::Browse(rest[1].to_string())
+            } else {
+                Args::Error
+            }
         } else {
             Args::Error
         }
@@ -70,6 +74,14 @@ fn parse_args(args: Vec<String>) -> Args {
         Args::Client(rest[0].to_string(), sudo.unwrap_or(false))
     } else {
         Args::Error
+    }
+}
+
+async fn browse_url(url: &str) {
+    if let Err(e) = fwd::browse_url(&url).await {
+        eprintln!("Unable to open {url}");
+        eprintln!("{}", e);
+        std::process::exit(1);
     }
 }
 
@@ -86,7 +98,7 @@ async fn main() {
             fwd::run_server().await;
         }
         Args::Browse(url) => {
-            fwd::browse_url(&url).await;
+            browse_url(&url).await;
         }
         Args::Client(server, sudo) => {
             fwd::run_client(&server, sudo).await;

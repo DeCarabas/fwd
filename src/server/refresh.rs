@@ -18,19 +18,15 @@ pub fn get_entries() -> Result<Vec<PortDesc>> {
     // error we encounter as it probably means we have no access to that
     // process or something.
     let mut map: HashMap<u64, String> = HashMap::new();
-    for p in all_procs {
-        if let Ok(process) = p {
-            if !process.is_alive() {
-                continue; // Ignore zombies.
-            }
+    for process in all_procs.flatten() {
+        if !process.is_alive() {
+            continue; // Ignore zombies.
+        }
 
-            if let (Ok(fds), Ok(cmd)) = (process.fd(), process.cmdline()) {
-                for fd in fds {
-                    if let Ok(fd) = fd {
-                        if let FDTarget::Socket(inode) = fd.target {
-                            map.insert(inode, cmd.join(" "));
-                        }
-                    }
+        if let (Ok(fds), Ok(cmd)) = (process.fd(), process.cmdline()) {
+            for fd in fds.flatten() {
+                if let FDTarget::Socket(inode) = fd.target {
+                    map.insert(inode, cmd.join(" "));
                 }
             }
         }

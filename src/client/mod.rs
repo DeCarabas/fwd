@@ -1,8 +1,10 @@
 use crate::message::{Message, MessageReader, MessageWriter};
 use anyhow::{bail, Result};
 use bytes::BytesMut;
+use copypasta::{ClipboardContext, ClipboardProvider};
 use log::LevelFilter;
 use log::{debug, error, info, warn};
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite,
@@ -14,6 +16,14 @@ use tokio::sync::mpsc;
 
 mod config;
 mod ui;
+
+// 256MB clipboard. Operating systems do not generally have a maximum size
+// but I need to buffer it all in memory in order to use the `copypasta`
+// crate and so I want to set a limit somewhere and this seems.... rational.
+// You should use another transfer mechanism other than this if you need more
+// than 256 MB of data. (Obviously future me will come along and shake his
+// head at the limitations of my foresight, but oh well.)
+const MAX_CLIPBOARD_SIZE: usize = 256 * 1024 * 1024;
 
 /// Wait for the server to be ready; we know the server is there and
 /// listening when we see the special sync marker, which is 8 NUL bytes in a
@@ -162,25 +172,22 @@ async fn client_handle_connection(
 /// Listen on a port that we are currently forwarding, and use the SOCKS5
 /// proxy on the specified port to handle the connections.
 async fn client_listen(port: u16, socks_port: u16) -> Result<()> {
+    let listener =
+        TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port)).await?;
     loop {
-        let listener =
-            TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
-                .await?;
-        loop {
-            // The second item contains the IP and port of the new
-            // connection, but we don't care.
-            let (socket, _) = listener.accept().await?;
+        // The second item contains the IP and port of the new
+        // connection, but we don't care.
+        let (socket, _) = listener.accept().await?;
 
-            tokio::spawn(async move {
-                if let Err(e) =
-                    client_handle_connection(socks_port, port, socket).await
-                {
-                    error!("Error handling connection: {:?}", e);
-                } else {
-                    debug!("Done???");
-                }
-            });
-        }
+        tokio::spawn(async move {
+            if let Err(e) =
+                client_handle_connection(socks_port, port, socket).await
+            {
+                error!("Error handling connection: {:?}", e);
+            } else {
+                debug!("Done???");
+            }
+        });
     }
 }
 
@@ -188,20 +195,60 @@ async fn client_handle_messages<T: AsyncRead + Unpin>(
     mut reader: MessageReader<T>,
     events: mpsc::Sender<ui::UIEvent>,
 ) -> Result<()> {
+    let mut clipboard_messages = HashMap::new();
     loop {
         use Message::*;
         match reader.read().await? {
             Ping => (),
+
             Ports(ports) => {
-                if let Err(_) = events.send(ui::UIEvent::Ports(ports)).await {
-                    // TODO: Log
+                if let Err(e) = events.send(ui::UIEvent::Ports(ports)).await {
+                    error!("Error sending ports request: {:?}", e);
                 }
             }
+
             Browse(url) => {
-                // TODO: Uh, security?
                 info!("Browsing to {url}...");
                 _ = open::that(url);
             }
+
+            ClipStart(id) => {
+                info!("Starting clip op {id}");
+                clipboard_messages.insert(id, Vec::new());
+            }
+
+            ClipData(id, mut data) => match clipboard_messages.get_mut(&id) {
+                Some(bytes) => {
+                    info!(
+                        "Received data for clip op {id} ({len} bytes)",
+                        len = data.len()
+                    );
+                    if bytes.len() < MAX_CLIPBOARD_SIZE {
+                        bytes.append(&mut data);
+                    }
+                }
+                None => {
+                    warn!("Received data for unknown clip op {id}");
+                }
+            },
+
+            ClipEnd(id) => {
+                let Some(data) = clipboard_messages.remove(&id) else {
+                    warn!("Received end for unknown clip op {id}");
+                    continue;
+                };
+
+                let Ok(data) = String::from_utf8(data) else {
+                    warn!("Received invalid utf8 for clipboard on op {id}");
+                    continue;
+                };
+
+                let mut ctx = ClipboardContext::new().unwrap();
+                if let Err(e) = ctx.set_contents(data) {
+                    error!("Unable to set clipboard data for op {id}: {e:?}");
+                }
+            }
+
             message => error!("Unsupported: {:?}", message),
         };
     }

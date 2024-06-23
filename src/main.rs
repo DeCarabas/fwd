@@ -14,6 +14,10 @@ connect to.
 On a server that already has a client connected to it you can use `fwd browse
 <url>` to open `<url>` in the default browser of the client.
 
+On a server that already has a client connected to it you can use `fwd clip`
+to read stdin and send it to the clipboard of the client, or `fwd clip <file>`
+to send the the contents of `file`.
+
 Options:
     --version    Print the version of fwd and exit
     --sudo, -s   Run the server side of fwd with `sudo`. This allows the
@@ -32,6 +36,7 @@ enum Args {
     Server,
     Client(String, bool),
     Browse(String),
+    Clip(Option<String>),
     Error,
 }
 
@@ -60,10 +65,18 @@ fn parse_args(args: Vec<String>) -> Args {
         } else {
             Args::Error
         }
-    } else if rest.len() > 1 {
+    } else if rest.len() >= 1 {
         if rest[0] == "browse" {
             if rest.len() == 2 {
                 Args::Browse(rest[1].to_string())
+            } else {
+                Args::Error
+            }
+        } else if rest[0] == "clip" {
+            if rest.len() == 1 {
+                Args::Clip(None)
+            } else if rest.len() == 2 {
+                Args::Clip(Some(rest[1].to_string()))
             } else {
                 Args::Error
             }
@@ -85,6 +98,14 @@ async fn browse_url(url: &str) {
     }
 }
 
+async fn clip_file(file: Option<String>) {
+    if let Err(e) = fwd::clip_file(file.as_deref()).await {
+        eprintln!("Unable to copy to the clipboard");
+        eprintln!("{}", e);
+        std::process::exit(1);
+    }
+}
+
 #[tokio::main]
 async fn main() {
     match parse_args(std::env::args().collect()) {
@@ -99,6 +120,9 @@ async fn main() {
         }
         Args::Browse(url) => {
             browse_url(&url).await;
+        }
+        Args::Clip(file) => {
+            clip_file(file).await;
         }
         Args::Client(server, sudo) => {
             fwd::run_client(&server, sudo).await;

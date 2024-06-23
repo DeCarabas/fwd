@@ -57,6 +57,11 @@ pub enum Message {
 
     // Browse a thing
     Browse(String),
+
+    // Send data to the remote clipboard
+    ClipStart(u64),
+    ClipData(u64, Vec<u8>),
+    ClipEnd(u64),
 }
 
 impl Message {
@@ -103,6 +108,19 @@ impl Message {
                 result.put_u8(0x07);
                 put_string(result, url);
             }
+            ClipStart(id) => {
+                result.put_u8(0x08);
+                result.put_u64(*id);
+            }
+            ClipData(id, data) => {
+                result.put_u8(0x09);
+                result.put_u64(*id);
+                put_data(result, data);
+            }
+            ClipEnd(id) => {
+                result.put_u8(0x0A);
+                result.put_u64(*id);
+            }
         };
     }
 
@@ -132,7 +150,20 @@ impl Message {
                 Ok(Ports(ports))
             }
             0x07 => Ok(Browse(get_string(cursor)?)),
-            b => Err(Error::Unknown(b).into()),
+            0x08 => {
+                let id = get_u64(cursor)?;
+                Ok(ClipStart(id))
+            }
+            0x09 => {
+                let id = get_u64(cursor)?;
+                let data = get_data(cursor)?;
+                Ok(Self::ClipData(id, data))
+            }
+            0x0A => {
+                let id = get_u64(cursor)?;
+                Ok(ClipEnd(id))
+            }
+            b => Err(Error::Unknown(b)),
         }
     }
 }
@@ -149,6 +180,13 @@ fn get_u16(cursor: &mut Cursor<&[u8]>) -> Result<u16> {
         return Err(Error::Incomplete);
     }
     Ok(cursor.get_u16())
+}
+
+fn get_u64(cursor: &mut Cursor<&[u8]>) -> Result<u64> {
+    if cursor.remaining() < 8 {
+        return Err(Error::Incomplete);
+    }
+    Ok(cursor.get_u64())
 }
 
 fn get_bytes(cursor: &mut Cursor<&[u8]>, length: usize) -> Result<Bytes> {
@@ -182,6 +220,22 @@ fn put_string<T: BufMut>(target: &mut T, str: &str) {
     target.put_slice(str.as_bytes());
 }
 
+fn put_data<T: BufMut>(target: &mut T, data: &[u8]) {
+    target.put_u16(data.len().try_into().expect("Buffer is too long"));
+    target.put_slice(data);
+}
+
+fn get_data(cursor: &mut Cursor<&[u8]>) -> Result<Vec<u8>> {
+    let length = get_u16(cursor)?;
+    if cursor.remaining() < length.into() {
+        return Err(Error::Incomplete);
+    }
+
+    let mut data: Vec<u8> = vec![0; length.into()];
+    cursor.copy_to_slice(&mut data);
+    Ok(data)
+}
+
 // ----------------------------------------------------------------------------
 // Message IO
 
@@ -193,14 +247,14 @@ impl<T: AsyncWrite + Unpin> MessageWriter<T> {
     pub fn new(writer: T) -> MessageWriter<T> {
         MessageWriter { writer }
     }
-    pub async fn write(self: &mut Self, msg: Message) -> Result<()> {
+    pub async fn write(&mut self, msg: Message) -> Result<()> {
         // TODO: Optimize buffer usage please this is bad
         // eprintln!("? {:?}", msg);
-        let mut buffer = msg.encode();
+        let buffer = msg.encode();
         self.writer
             .write_u32(buffer.len().try_into().expect("Message too large"))
             .await?;
-        self.writer.write_all(&mut buffer).await?;
+        self.writer.write_all(&buffer).await?;
         self.writer.flush().await?;
         Ok(())
     }
@@ -214,7 +268,8 @@ impl<T: AsyncRead + Unpin> MessageReader<T> {
     pub fn new(reader: T) -> MessageReader<T> {
         MessageReader { reader }
     }
-    pub async fn read(self: &mut Self) -> Result<Message> {
+
+    pub async fn read(&mut self) -> Result<Message> {
         let frame_length = self.reader.read_u32().await?;
         let mut data = vec![0; frame_length.try_into().unwrap()];
         self.reader.read_exact(&mut data).await?;
@@ -283,6 +338,12 @@ mod message_tests {
             },
         ]));
         assert_round_trip(Browse("https://google.com/".to_string()));
+        assert_round_trip(ClipStart(0x1234567890ABCDEF));
+        assert_round_trip(ClipData(
+            0x1234567890ABCDEF,
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        ));
+        assert_round_trip(ClipEnd(0x1234567890ABCDEF));
     }
 
     #[test]

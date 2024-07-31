@@ -60,12 +60,12 @@ fn parse_args(args: Vec<String>) -> Args {
     }
 
     if server.unwrap_or(false) {
-        if rest.len() == 0 && sudo.is_none() {
+        if rest.is_empty() && sudo.is_none() {
             Args::Server
         } else {
             Args::Error
         }
-    } else if rest.len() >= 1 {
+    } else if !rest.is_empty() {
         if rest[0] == "browse" {
             if rest.len() == 2 {
                 Args::Browse(rest[1].to_string())
@@ -91,7 +91,7 @@ fn parse_args(args: Vec<String>) -> Args {
 }
 
 async fn browse_url(url: &str) {
-    if let Err(e) = fwd::browse_url(&url).await {
+    if let Err(e) = fwd::browse_url(url).await {
         eprintln!("Unable to open {url}");
         eprintln!("{}", e);
         std::process::exit(1);
@@ -141,8 +141,7 @@ mod tests {
 
     // Goldarn it.
     fn args(x: &[&str]) -> Vec<String> {
-        let mut vec: Vec<String> =
-            x.into_iter().map(|a| a.to_string()).collect();
+        let mut vec: Vec<String> = x.iter().map(|a| a.to_string()).collect();
         vec.insert(0, "fwd".to_string());
         vec
     }

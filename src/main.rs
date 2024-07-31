@@ -166,6 +166,7 @@ mod tests {
     fn errors() {
         assert_arg_parse!(&[], Args::Error);
         assert_arg_parse!(&["browse", "google.com", "what"], Args::Error);
+        assert_arg_parse!(&["clip", "a.txt", "b.txt"], Args::Error);
         assert_arg_parse!(&["a", "b"], Args::Error);
         assert_arg_parse!(&["--server", "something"], Args::Error);
         assert_arg_parse!(&["--server", "--sudo"], Args::Error);

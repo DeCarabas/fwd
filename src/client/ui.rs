@@ -13,13 +13,14 @@ use log::{error, info, Level, Metadata, Record};
 use std::collections::vec_deque::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::io::stdout;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
 use tui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout, Margin, Rect},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     widgets::{
         Block, Borders, List, ListItem, ListState, Row, Table, TableState,
     },
@@ -67,9 +68,22 @@ impl log::Log for Logger {
     fn flush(&self) {}
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum State {
+    Enabled,
+    Broken,
+    Disabled,
+}
+
+impl State {
+    fn boxed(self) -> Arc<Mutex<State>> {
+        Arc::new(Mutex::new(self))
+    }
+}
+
 #[derive(Debug)]
 struct Listener {
-    enabled: bool,
+    state: std::sync::Arc<std::sync::Mutex<State>>,
     stop: Option<oneshot::Sender<()>>,
     desc: Option<PortDesc>,
 }
@@ -80,7 +94,15 @@ impl Listener {
         desc: PortDesc,
         enabled: bool,
     ) -> Listener {
-        let mut listener = Listener { enabled, stop: None, desc: Some(desc) };
+        let mut listener = Listener {
+            state: if enabled {
+                State::Enabled.boxed()
+            } else {
+                State::Disabled.boxed()
+            },
+            stop: None,
+            desc: Some(desc),
+        };
         if enabled {
             listener.start(socks_port);
         }
@@ -88,15 +110,19 @@ impl Listener {
     }
 
     pub fn enabled(&self) -> bool {
-        self.enabled
+        self.state() == State::Enabled
+    }
+
+    fn state(&self) -> State {
+        *self.state.lock().unwrap()
     }
 
     pub fn set_enabled(&mut self, socks_port: Option<u16>, enabled: bool) {
         if enabled {
-            self.enabled = true;
+            self.state = State::Enabled.boxed();
             self.start(socks_port);
         } else {
-            self.enabled = false;
+            self.state = State::Disabled.boxed();
             self.stop = None;
         }
     }
@@ -112,19 +138,22 @@ impl Listener {
     }
 
     pub fn start(&mut self, socks_port: Option<u16>) {
-        if self.enabled {
+        if self.enabled() {
             if let (Some(desc), Some(socks_port), None) =
                 (&self.desc, socks_port, &self.stop)
             {
                 info!("Starting port {port} to {socks_port}", port = desc.port);
                 let (l, stop) = oneshot::channel();
                 let port = desc.port;
+                let state = self.state.clone();
                 tokio::spawn(async move {
                     let result = tokio::select! {
                         r = client_listen(port, socks_port) => r,
                         _ = stop => Ok(()),
                     };
                     if let Err(e) = result {
+                        let mut sg = state.lock().unwrap();
+                        *sg = State::Broken;
                         error!("Error listening on port {port}: {e:?}");
                     } else {
                         info!("Stopped listening on port {port}");
@@ -243,6 +272,8 @@ impl UI {
     fn render_ports<B: Backend>(&mut self, frame: &mut Frame<B>, size: Rect) {
         let enabled_port_style = Style::default();
         let disabled_port_style = Style::default().fg(Color::DarkGray);
+        let broken_port_style =
+            Style::default().fg(Color::Red).add_modifier(Modifier::DIM);
 
         let mut rows = Vec::new();
         let ports = self.get_ui_ports();
@@ -250,20 +281,18 @@ impl UI {
             ports.iter().map(|p| format!("{p}")).collect();
         for (index, port) in ports.into_iter().enumerate() {
             let listener = self.ports.get(&port).unwrap();
+            let (symbol, style) = match listener.state() {
+                State::Enabled => (" ✓ ", enabled_port_style),
+                State::Broken => (" ✗ ", broken_port_style),
+                State::Disabled => ("", disabled_port_style),
+            };
             rows.push(
                 Row::new(vec![
-                    if listener.enabled { " ✓ " } else { "" },
-                    &port_strings[index][..],
-                    match &listener.desc {
-                        Some(port_desc) => &port_desc.desc,
-                        None => "",
-                    },
+                    symbol,
+                    &*port_strings[index],
+                    listener.desc.as_ref().map(|pd| &*pd.desc).unwrap_or(""),
                 ])
-                .style(if listener.enabled {
-                    enabled_port_style
-                } else {
-                    disabled_port_style
-                }),
+                .style(style),
             );
         }
 
@@ -357,7 +386,11 @@ impl UI {
     }
 
     fn enable_disable_port(&mut self, port: u16) {
-        if let Some(listener) = self.ports.get_mut(&port) {
+        let state = self.ports.get(&port).map(Listener::state);
+        if state == Some(State::Broken) {
+            // try turning it off and on again, it will at least get logs visible
+            self.ports.remove(&port);
+        } else if let Some(listener) = self.ports.get_mut(&port) {
             listener.set_enabled(self.socks_port, !listener.enabled());
         }
     }

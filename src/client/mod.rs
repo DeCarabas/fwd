@@ -323,6 +323,7 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
 async fn spawn_ssh(
     server: &str,
     sudo: bool,
+    log_filter: &str,
 ) -> Result<(tokio::process::Child, u16), std::io::Error> {
     let socks_port = {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -337,7 +338,9 @@ async fn spawn_ssh(
     if sudo {
         cmd.arg("sudo");
     }
-    cmd.arg("fwd").arg("--server");
+    cmd.arg(format!("FWD_LOG={log_filter}"))
+        .arg("fwd")
+        .arg("--server");
 
     cmd.stdout(std::process::Stdio::piped());
     cmd.stdin(std::process::Stdio::piped());
@@ -367,13 +370,15 @@ fn is_sigint(status: std::process::ExitStatus) -> bool {
 async fn client_connect_loop(
     remote: &str,
     sudo: bool,
+    log_filter: &str,
     events: mpsc::Sender<ui::UIEvent>,
 ) {
     loop {
         _ = events.send(ui::UIEvent::Disconnected).await;
 
-        let (mut child, socks_port) =
-            spawn_ssh(remote, sudo).await.expect("failed to spawn");
+        let (mut child, socks_port) = spawn_ssh(remote, sudo, log_filter)
+            .await
+            .expect("failed to spawn");
 
         let mut stderr = child
             .stderr
@@ -431,7 +436,7 @@ async fn client_connect_loop(
     }
 }
 
-pub async fn run_client(remote: &str, sudo: bool) {
+pub async fn run_client(remote: &str, sudo: bool, log_filter: &str) {
     let (event_sender, event_receiver) = mpsc::channel(1024);
     _ = log::set_boxed_logger(ui::Logger::new(event_sender.clone()));
     log::set_max_level(LevelFilter::Info);
@@ -449,7 +454,7 @@ pub async fn run_client(remote: &str, sudo: bool) {
     // Start the reconnect loop.
     tokio::select! {
         _ = ui.run() => (),
-        _ = client_connect_loop(remote, sudo, event_sender) => ()
+        _ = client_connect_loop(remote, sudo, log_filter, event_sender) => ()
     }
 }
 

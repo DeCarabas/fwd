@@ -1,5 +1,7 @@
 use anyhow::Result;
-use log::{error, warn};
+#[cfg_attr(not(target_os = "linux"), allow(unused))]
+use log::error;
+use log::warn;
 use std::collections::HashMap;
 
 use crate::message::PortDesc;
@@ -8,9 +10,10 @@ use crate::message::PortDesc;
 mod procfs;
 
 pub async fn get_entries() -> Result<Vec<PortDesc>> {
-    #[allow(unused)]
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut attempts = 0;
 
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut result: HashMap<u16, PortDesc> = HashMap::new();
 
     #[cfg(target_os = "linux")]

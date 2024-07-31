@@ -59,17 +59,13 @@ async fn clip_reader<T: AsyncRead + Unpin>(reader: &mut T) -> Result<()> {
 }
 
 #[inline]
-pub async fn clip_file(file: Option<&str>) -> Result<()> {
-    // send_reverse_message(Message::Browse(url.to_string())).await
-    match file {
-        Some(path) => {
-            let mut file = tokio::fs::File::open(path).await?;
-            clip_reader(&mut file).await?;
-        }
-        None => {
-            let mut stdin = tokio::io::stdin();
-            clip_reader(&mut stdin).await?;
-        }
+pub async fn clip_file(file: &str) -> Result<()> {
+    if file == "-" {
+        let mut stdin = tokio::io::stdin();
+        clip_reader(&mut stdin).await?;
+    } else {
+        let mut file = tokio::fs::File::open(file).await?;
+        clip_reader(&mut file).await?;
     }
 
     Ok(())

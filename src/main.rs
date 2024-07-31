@@ -14,7 +14,7 @@ connect to.
 On a server that already has a client connected to it you can use `fwd browse
 <url>` to open `<url>` in the default browser of the client.
 
-On a server that already has a client connected to it you can use `fwd clip`
+On a server that already has a client connected to it you can use `fwd clip -`
 to read stdin and send it to the clipboard of the client, or `fwd clip <file>`
 to send the the contents of `file`.
 
@@ -36,7 +36,7 @@ enum Args {
     Server,
     Client(String, bool),
     Browse(String),
-    Clip(Option<String>),
+    Clip(String),
     Error,
 }
 
@@ -77,9 +77,9 @@ fn parse_args(args: Vec<String>) -> Args {
         }
     } else if rest[0] == "clip" {
         if rest.len() == 1 {
-            Args::Clip(None)
+            Args::Client(rest[0].to_string(), sudo.unwrap_or(false))
         } else if rest.len() == 2 {
-            Args::Clip(Some(rest[1].to_string()))
+            Args::Clip(rest[1].to_string())
         } else {
             Args::Error
         }
@@ -98,8 +98,8 @@ async fn browse_url(url: &str) {
     }
 }
 
-async fn clip_file(file: Option<String>) {
-    if let Err(e) = fwd::clip_file(file.as_deref()).await {
+async fn clip_file(file: String) {
+    if let Err(e) = fwd::clip_file(&file).await {
         eprintln!("Unable to copy to the clipboard");
         eprintln!("{}", e);
         std::process::exit(1);
@@ -177,9 +177,11 @@ mod tests {
         assert_arg_parse!(&["foo.com"], Args::Client(_, false));
         assert_arg_parse!(&["a"], Args::Client(_, false));
         assert_arg_parse!(&["browse"], Args::Client(_, false));
+        assert_arg_parse!(&["clip"], Args::Client(_, false));
         assert_arg_parse!(&["foo.com", "--sudo"], Args::Client(_, true));
         assert_arg_parse!(&["a", "-s"], Args::Client(_, true));
         assert_arg_parse!(&["-s", "browse"], Args::Client(_, true));
+        assert_arg_parse!(&["-s", "clip"], Args::Client(_, true));
     }
 
     #[test]
@@ -189,8 +191,8 @@ mod tests {
 
     #[test]
     fn clip() {
-        assert_arg_parse!(&["clip"], Args::Clip(None));
-        assert_arg_parse!(&["clip", "garbage"], Args::Clip(Some(_)));
+        assert_arg_parse!(&["clip", "garbage"], Args::Clip(_));
+        assert_arg_parse!(&["clip", "-"], Args::Clip(_));
     }
 
     #[test]

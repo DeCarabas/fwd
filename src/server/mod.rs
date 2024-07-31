@@ -82,6 +82,10 @@ async fn server_main<
 }
 
 pub async fn run_server() {
+    env_logger::Builder::from_env(
+        env_logger::Env::new().filter_or("FWD_LOG", "warn"),
+    )
+    .init();
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
     if let Err(e) = server_main(stdin, stdout).await {

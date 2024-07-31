@@ -26,6 +26,10 @@ Options:
                  run as root), but requires sudo access on the server and
                  *might* end up forwarding ports that you do not want
                  forwarded (e.g., port 22 for sshd, or port 53 for systemd.)
+    --log-filter FILTER
+                 Set remote server's log level. Default is `warn`. Supports
+                 all of Rust's env_logger filter syntax, e.g.
+                 `--log-filter=fwd::trace`.
     "});
 }
 
@@ -34,7 +38,7 @@ enum Args {
     Help,
     Version,
     Server,
-    Client(String, bool),
+    Client(String, bool, String),
     Browse(String),
     Clip(String),
     Error,
@@ -43,9 +47,11 @@ enum Args {
 fn parse_args(args: Vec<String>) -> Args {
     let mut server = None;
     let mut sudo = None;
+    let mut log_filter = None;
     let mut rest = Vec::new();
 
-    for arg in args.into_iter().skip(1) {
+    let mut arg_iter = args.into_iter().skip(1);
+    while let Some(arg) = arg_iter.next() {
         if arg == "--help" || arg == "-?" || arg == "-h" {
             return Args::Help;
         } else if arg == "--version" {
@@ -54,6 +60,14 @@ fn parse_args(args: Vec<String>) -> Args {
             server = Some(true)
         } else if arg == "--sudo" || arg == "-s" {
             sudo = Some(true)
+        } else if arg.starts_with("--log-filter") {
+            if arg.contains('=') {
+                log_filter = Some(arg.split('=').nth(1).unwrap().to_owned());
+            } else if let Some(arg) = arg_iter.next() {
+                log_filter = Some(arg);
+            } else {
+                return Args::Error;
+            }
         } else {
             rest.push(arg)
         }
@@ -71,20 +85,24 @@ fn parse_args(args: Vec<String>) -> Args {
         if rest.len() == 2 {
             Args::Browse(rest[1].to_string())
         } else if rest.len() == 1 {
-            Args::Client(rest[0].to_string(), sudo.unwrap_or(false))
+            Args::Client(rest[0].to_string(), sudo.unwrap_or(false), log_filter.unwrap_or("warn".to_owned()))
         } else {
             Args::Error
         }
     } else if rest[0] == "clip" {
         if rest.len() == 1 {
-            Args::Client(rest[0].to_string(), sudo.unwrap_or(false))
+            Args::Client(rest[0].to_string(), sudo.unwrap_or(false), log_filter.unwrap_or("warn".to_owned()))
         } else if rest.len() == 2 {
             Args::Clip(rest[1].to_string())
         } else {
             Args::Error
         }
     } else if rest.len() == 1 {
-        Args::Client(rest[0].to_string(), sudo.unwrap_or(false))
+        Args::Client(
+            rest[0].to_string(),
+            sudo.unwrap_or(false),
+            log_filter.unwrap_or("warn".to_owned()),
+        )
     } else {
         Args::Error
     }
@@ -124,8 +142,8 @@ async fn main() {
         Args::Clip(file) => {
             clip_file(file).await;
         }
-        Args::Client(server, sudo) => {
-            fwd::run_client(&server, sudo).await;
+        Args::Client(server, sudo, log_filter) => {
+            fwd::run_client(&server, sudo, &log_filter).await;
         }
         Args::Error => {
             usage();
@@ -175,14 +193,29 @@ mod tests {
 
     #[test]
     fn client() {
-        assert_arg_parse!(&["foo.com"], Args::Client(_, false));
-        assert_arg_parse!(&["a"], Args::Client(_, false));
-        assert_arg_parse!(&["browse"], Args::Client(_, false));
-        assert_arg_parse!(&["clip"], Args::Client(_, false));
-        assert_arg_parse!(&["foo.com", "--sudo"], Args::Client(_, true));
-        assert_arg_parse!(&["a", "-s"], Args::Client(_, true));
-        assert_arg_parse!(&["-s", "browse"], Args::Client(_, true));
-        assert_arg_parse!(&["-s", "clip"], Args::Client(_, true));
+        assert_arg_parse!(&["foo.com"], Args::Client( _, false, _));
+        assert_arg_parse!(&["a"], Args::Client(_, false, _));
+        assert_arg_parse!(&["browse"], Args::Client(_, false, _));
+        assert_arg_parse!(&["clip"], Args::Client(_, false, _));
+        assert_arg_parse!(&["foo.com", "--sudo"], Args::Client(_, true, _));
+        assert_arg_parse!(&["a", "-s"], Args::Client(_, true, _));
+        assert_arg_parse!(&["-s", "browse"], Args::Client(_, true, _));
+        assert_arg_parse!(&["-s", "clip"], Args::Client(_, true, _));
+
+        assert_client_parse(&["a"], "a", false, "warn");
+        assert_client_parse(&["a", "--log-filter", "info"], "a", false, "info");
+        assert_client_parse(&["a", "--log-filter=info"], "a", false, "info");
+        assert_client_parse(&["a", "--sudo", "--log-filter=info"], "a", true, "info");
+    }
+
+    fn assert_client_parse(x: &[&str], server: &str, sudo: bool, log_filter: &str) {
+        let args = parse_args(args(x));
+        assert_matches!(args, Args::Client(_, _, _));
+        if let Args::Client(s, sdo, lf) = args {
+            assert_eq!(s, server);
+            assert_eq!(sdo, sudo);
+            assert_eq!(lf, log_filter);
+        }
     }
 
     #[test]

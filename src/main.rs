@@ -65,21 +65,21 @@ fn parse_args(args: Vec<String>) -> Args {
         } else {
             Args::Error
         }
-    } else if !rest.is_empty() {
-        if rest[0] == "browse" {
-            if rest.len() == 2 {
-                Args::Browse(rest[1].to_string())
-            } else {
-                Args::Error
-            }
-        } else if rest[0] == "clip" {
-            if rest.len() == 1 {
-                Args::Clip(None)
-            } else if rest.len() == 2 {
-                Args::Clip(Some(rest[1].to_string()))
-            } else {
-                Args::Error
-            }
+    } else if rest.is_empty() {
+        Args::Error
+    } else if rest[0] == "browse" {
+        if rest.len() == 2 {
+            Args::Browse(rest[1].to_string())
+        } else if rest.len() == 1 {
+            Args::Client(rest[0].to_string(), sudo.unwrap_or(false))
+        } else {
+            Args::Error
+        }
+    } else if rest[0] == "clip" {
+        if rest.len() == 1 {
+            Args::Clip(None)
+        } else if rest.len() == 2 {
+            Args::Clip(Some(rest[1].to_string()))
         } else {
             Args::Error
         }
@@ -185,6 +185,11 @@ mod tests {
     #[test]
     fn server() {
         assert_arg_parse!(&["--server"], Args::Server);
+    }
+
+    #[test]
+    fn clip() {
+        assert_arg_parse!(&["clip"], Args::Clip(None));
     }
 
     #[test]

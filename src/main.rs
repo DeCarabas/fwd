@@ -190,6 +190,7 @@ mod tests {
     #[test]
     fn clip() {
         assert_arg_parse!(&["clip"], Args::Clip(None));
+        assert_arg_parse!(&["clip", "garbage"], Args::Clip(Some(_)));
     }
 
     #[test]

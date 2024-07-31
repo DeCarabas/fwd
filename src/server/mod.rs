@@ -32,7 +32,7 @@ async fn server_loop<Reader: AsyncRead + Unpin>(
         match reader.read().await? {
             Ping => (),
             Refresh => {
-                let ports = match refresh::get_entries() {
+                let ports = match refresh::get_entries().await {
                     Ok(ports) => ports,
                     Err(e) => {
                         error!("Error scanning: {:?}", e);

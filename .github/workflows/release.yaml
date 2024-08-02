@@ -92,13 +92,7 @@ jobs:
         echo "TARGET_DIR=./target/${{ matrix.target }}" >> $GITHUB_ENV
 
     - name: Build release binary
-      run: ${{ env.CARGO }} build --verbose --release ${{ env.TARGET_FLAGS }}
-
-    - name: Strip release binary (linux and macos)
-      if: matrix.build == 'linux' || matrix.build == 'macos' || matrix.build == 'arm-macos'
-      run: |
-        strip "target/${{ matrix.target }}/release/fwd"
-        strip "target/${{ matrix.target }}/release/fwd-browse"
+      run: ${{ env.CARGO }} build --verbose --profile small ${{ env.TARGET_FLAGS }}
 
     - name: Build archive
       shell: bash

@@ -7,7 +7,7 @@ use crate::message::PortDesc;
 #[cfg(target_os = "linux")]
 mod procfs;
 
-pub fn get_entries() -> Result<Vec<PortDesc>> {
+pub async fn get_entries() -> Result<Vec<PortDesc>> {
     #[allow(unused)]
     let mut attempts = 0;
 

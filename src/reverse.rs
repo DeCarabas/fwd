@@ -20,7 +20,7 @@ pub async fn send_reverse_message(_message: Message) -> Result<()> {
 
 #[cfg(not(target_family = "unix"))]
 pub async fn handle_reverse_connections(
-    _messages: mpsc::Sender<Message>,
+    _messages: tokio::sync::mpsc::Sender<Message>,
 ) -> Result<()> {
     std::future::pending().await
 }

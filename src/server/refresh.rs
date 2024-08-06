@@ -9,12 +9,28 @@ use crate::message::PortDesc;
 #[cfg(target_os = "linux")]
 mod procfs;
 
+#[cfg(unix)]
+mod docker;
+
 pub async fn get_entries() -> Result<Vec<PortDesc>> {
     #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut attempts = 0;
 
     #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut result: HashMap<u16, PortDesc> = HashMap::new();
+
+    #[cfg(unix)]
+    {
+        attempts += 1;
+        match docker::get_entries().await {
+            Ok(m) => {
+                for (p, d) in m {
+                    result.entry(p).or_insert(d);
+                }
+            }
+            Err(e) => error!("Error reading from docker: {e:?}"),
+        }
+    }
 
     #[cfg(target_os = "linux")]
     {

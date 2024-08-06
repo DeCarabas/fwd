@@ -87,6 +87,20 @@ enum JsonValue {
     Array(Vec<JsonValue>),
 }
 
+/// If the characters at `chars` match the characters in `prefix`, consume
+/// those and return true. Otherwise, return false and do not advance the
+/// iterator.
+fn matches(chars: &mut std::str::Chars, prefix: &str) -> bool {
+    let backup = chars.clone();
+    for c in prefix.chars() {
+        if chars.next() != Some(c) {
+            *chars = backup;
+            return false;
+        }
+    }
+    true
+}
+
 impl JsonValue {
     pub fn parse(blob: &[u8]) -> Result<Self> {
         Self::parse_impl(blob).with_context(|| {
@@ -191,8 +205,9 @@ impl JsonValue {
                         bail!("Unterminated string at {i}");
                     }
                     assert_eq!(blob[i], b'"');
-                    let mut chars =
-                        std::str::from_utf8(&blob[start..i])?.chars();
+
+                    let source = String::from_utf8_lossy(&blob[start..i]);
+                    let mut chars = source.chars();
                     i += 1; // Consume the final quote.
 
                     let mut value = String::new();
@@ -201,25 +216,52 @@ impl JsonValue {
                             match chars.next().expect("mismatched escape") {
                                 '"' => value.push('"'),
                                 '\\' => value.push('\\'),
+                                '/' => value.push('/'),
                                 'b' => value.push('\x08'),
                                 'f' => value.push('\x0C'),
                                 'n' => value.push('\n'),
                                 'r' => value.push('\r'),
                                 't' => value.push('\t'),
                                 'u' => {
-                                    // 4 hex
+                                    // 4 hex to a 16bit number.
+                                    //
+                                    // This is complicated because it might
+                                    // be the first part of a surrogate pair,
+                                    // which is a utf-16 thing that we should
+                                    // decode properly. (Hard to think of an
+                                    // acceptable way to cheat this.) So we
+                                    // buffer all codes we can find into a
+                                    // vector of u16s and then use
+                                    // std::char's `decode_utf16` to get the
+                                    // final string. We could do this with
+                                    // fewer allocations if we cared more.
                                     let mut temp = String::with_capacity(4);
-                                    for _ in 0..4 {
-                                        let Some(c) = chars.next() else {
-                                            bail!("not enough chars in unicode escape")
-                                        };
-                                        temp.push(c);
+                                    let mut utf16 = Vec::new();
+                                    loop {
+                                        temp.clear();
+                                        for _ in 0..4 {
+                                            let Some(c) = chars.next() else {
+                                                bail!("not enough chars in unicode escape")
+                                            };
+                                            temp.push(c);
+                                        }
+                                        let code =
+                                            u16::from_str_radix(&temp, 16)?;
+                                        utf16.push(code);
+
+                                        // `matches` only consumes on a match...
+                                        if !matches(&mut chars, "\\u") {
+                                            break;
+                                        }
                                     }
-                                    let code = u32::from_str_radix(&temp, 16)?;
-                                    let Some(c) = char::from_u32(code) else {
-                                        bail!("invalid escape code {temp}")
-                                    };
-                                    value.push(c);
+
+                                    value.extend(
+                                        char::decode_utf16(utf16).map(|r| {
+                                            r.unwrap_or(
+                                                char::REPLACEMENT_CHARACTER,
+                                            )
+                                        }),
+                                    );
                                 }
                                 _ => bail!("Invalid json escape"),
                             }
@@ -348,7 +390,7 @@ mod test {
     use super::*;
 
     #[test]
-    pub fn test_json_decode_basic() {
+    pub fn json_decode_basic() {
         let cases: Vec<(&str, JsonValue)> = vec![
             ("12", JsonValue::Number(12.0)),
             ("12.7", JsonValue::Number(12.7)),
@@ -370,7 +412,7 @@ mod test {
     }
 
     #[test]
-    pub fn test_json_decode_array() {
+    pub fn json_decode_array() {
         let result = JsonValue::parse(b"[1, true, \"foo\", null]").unwrap();
         let JsonValue::Array(result) = result else {
             panic!("Expected an array");
@@ -383,13 +425,13 @@ mod test {
     }
 
     #[test]
-    pub fn test_json_decode_array_empty() {
+    pub fn json_decode_array_empty() {
         let result = JsonValue::parse(b"[]").unwrap();
         assert_eq!(result, JsonValue::Array(vec![]));
     }
 
     #[test]
-    pub fn test_json_decode_array_nested() {
+    pub fn json_decode_array_nested() {
         let result = JsonValue::parse(b"[1, [2, 3], 4]").unwrap();
         assert_eq!(
             result,
@@ -405,7 +447,7 @@ mod test {
     }
 
     #[test]
-    pub fn test_json_decode_object() {
+    pub fn json_decode_object() {
         let result = JsonValue::parse(
             b"{\"a\": 1.0, \"b\": [2.0, 3.0], \"c\": {\"d\": 4.0}}",
         )
@@ -433,7 +475,34 @@ mod test {
     }
 
     #[test]
-    pub fn test_json_decode_docker() {
+    pub fn json_decode_test_files() {
+        use std::path::{Path, PathBuf};
+        fn is_json(p: &Path) -> bool {
+            p.is_file() && p.extension().map(|s| s == "json").unwrap_or(false)
+        }
+
+        let manifest_dir: PathBuf =
+            [env!("CARGO_MANIFEST_DIR"), "resources", "json"]
+                .iter()
+                .collect();
+
+        for file in manifest_dir.read_dir().unwrap().flatten() {
+            let path = file.path();
+            if !is_json(&path) {
+                continue;
+            }
+
+            let json = std::fs::read(&path).expect("Unable to read input file");
+            let path = path.display();
+            if let Err(err) = JsonValue::parse(&json) {
+                panic!("Unable to parse {path}: {err:?}");
+            }
+            eprintln!("Parsed {path} successfully");
+        }
+    }
+
+    #[test]
+    pub fn json_decode_docker() {
         use pretty_assertions::assert_eq;
 
         // This is the example container response from docker

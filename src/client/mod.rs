@@ -62,7 +62,7 @@ async fn client_sync<S: AsyncRead + Unpin, T: AsyncRead + Unpin>(
         } => result,
     };
 
-    if let Err(_) = result {
+    if result.is_err() {
         // Something went wrong, let's just make sure we flush the client's
         // stderr before we return.
         _ = stderr.write_all(&buf[..]).await;
@@ -121,7 +121,7 @@ async fn client_handle_connection(
         0,                                          // ..ho..
         1,                                          // ..st
         ((port & 0xFF00) >> 8).try_into().unwrap(), // port (high)
-        ((port & 0x00FF) >> 0).try_into().unwrap(), // port (low)
+        (port & 0x00FF).try_into().unwrap(),        // port (low)
     ];
     dest_socket.write_all(&packet[..]).await?;
 
@@ -306,14 +306,14 @@ async fn client_main<Reader: AsyncRead + Unpin, Writer: AsyncWrite + Unpin>(
             }
         } => {
             if let Err(e) = result {
-                print!("Error sending refreshes\n");
+                println!("Error sending refreshes");
                 return Err(e.into());
             }
         },
         result = client_handle_messages(reader, events) => {
             if let Err(e) = result {
-                print!("Error handling messages\n");
-                return Err(e.into());
+                println!("Error handling messages");
+                return Err(e);
             }
         },
     }
@@ -399,18 +399,14 @@ async fn client_connect_loop(
 
         if let Err(e) = client_sync(&mut reader, &mut stderr).await {
             error!("Error synchronizing: {:?}", e);
-            match child.wait().await {
-                Ok(status) => {
-                    if is_sigint(status) {
-                        return;
-                    } else {
-                        match status.code() {
-                            Some(127) => eprintln!("Cannot find `fwd` remotely, make sure it is installed"),
-                            _ => (),
-                        };
-                    }
+            if let Ok(status) = child.wait().await {
+                if is_sigint(status) {
+                    return;
+                } else if let Some(127) = status.code() {
+                    eprintln!(
+                        "Cannot find `fwd` remotely, make sure it is installed"
+                    );
                 }
-                Err(_) => (),
             };
 
             tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;

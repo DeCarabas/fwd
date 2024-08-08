@@ -571,7 +571,7 @@ impl UI {
                 // Grab the selected port
                 let selected_port = self.get_selected_port();
 
-                for port_desc in p.into_iter() {
+                for mut port_desc in p.into_iter() {
                     leftover_ports.remove(&port_desc.port);
                     if let Some(listener) = self.ports.get_mut(&port_desc.port)
                     {
@@ -579,6 +579,8 @@ impl UI {
                     } else {
                         let config = self.config.get(port_desc.port);
                         info!("Port config {port_desc:?} -> {config:?}");
+                        port_desc.desc =
+                            config.description.unwrap_or(port_desc.desc);
 
                         self.ports.insert(
                             port_desc.port,

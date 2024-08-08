@@ -674,6 +674,8 @@ fn centered_rect(width_chars: u16, height_chars: u16, r: Rect) -> Rect {
 
 #[cfg(test)]
 mod tests {
+    use crate::client::config::PortConfig;
+
     use super::*;
     use assert_matches::assert_matches;
 
@@ -937,5 +939,57 @@ mod tests {
         assert_eq!(centered.top(), 10 + (128 - centered.height) / 2);
         assert_eq!(centered.width, 10);
         assert_eq!(centered.height, 10);
+    }
+
+    #[test]
+    fn port_config_description_respected() {
+        let (sender, receiver) = mpsc::channel(64);
+        let mut config = ServerConfig::default();
+        config.insert(
+            8080,
+            PortConfig {
+                enabled: true,
+                description: Some("override".to_string()),
+            },
+        );
+
+        let mut ui = UI::new(receiver, config);
+
+        // There are ports...
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![PortDesc {
+            port: 8080,
+            desc: "my-service".to_string(),
+        }])));
+
+        let description = ui.ports.get(&8080).unwrap().desc.as_ref().unwrap();
+        assert_eq!(description.desc, "override");
+
+        drop(sender);
+    }
+
+    #[test]
+    fn port_config_enabled_respected() {
+        let (sender, receiver) = mpsc::channel(64);
+        let mut config = ServerConfig::default();
+        config.insert(
+            8080,
+            PortConfig {
+                enabled: false,
+                description: Some("override".to_string()),
+            },
+        );
+
+        let mut ui = UI::new(receiver, config);
+
+        // There are ports...
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![PortDesc {
+            port: 8080,
+            desc: "my-service".to_string(),
+        }])));
+
+        let state = ui.ports.get(&8080).unwrap().state();
+        assert_eq!(state, State::Disabled);
+
+        drop(sender);
     }
 }

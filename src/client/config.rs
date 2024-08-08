@@ -20,6 +20,11 @@ impl ServerConfig {
         ServerConfig { auto: true, ports: HashMap::new() }
     }
 
+    #[cfg(test)]
+    pub fn insert(&mut self, port: u16, config: PortConfig) {
+        self.ports.insert(port, config);
+    }
+
     pub fn contains_key(&self, port: u16) -> bool {
         self.ports.contains_key(&port)
     }

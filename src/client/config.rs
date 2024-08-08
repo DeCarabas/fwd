@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use std::collections::hash_map;
 use std::collections::HashMap;
 use toml::Value;
 
@@ -23,6 +24,10 @@ impl ServerConfig {
     #[cfg(test)]
     pub fn insert(&mut self, port: u16, config: PortConfig) {
         self.ports.insert(port, config);
+    }
+
+    pub fn iter(&self) -> hash_map::Iter<u16, PortConfig> {
+        self.ports.iter()
     }
 
     pub fn contains_key(&self, port: u16) -> bool {
@@ -69,7 +74,7 @@ pub fn load_config() -> Result<Config> {
         },
     };
 
-    Ok(parse_config(&contents.parse::<Value>()?)?)
+    parse_config(&contents.parse::<Value>()?)
 }
 
 fn default() -> Config {
@@ -84,10 +89,7 @@ fn parse_config(value: &Value) -> Result<Config> {
                 Some(Value::Boolean(v)) => *v,
                 Some(v) => bail!("expected a true or false, got {:?}", v),
             };
-            Config {
-                auto,
-                servers: get_servers(&table, auto)?,
-            }
+            Config { auto, servers: get_servers(table, auto)? }
         }),
         _ => bail!("top level must be a table"),
     }

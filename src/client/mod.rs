@@ -432,8 +432,13 @@ pub async fn run_client(remote: &str, sudo: bool, log_filter: &str) {
     _ = log::set_boxed_logger(ui::Logger::new(event_sender.clone()));
     log::set_max_level(LevelFilter::Info);
 
+    let server = if let Some((_user, server)) = remote.split_once("@") {
+        server
+    } else {
+        remote
+    };
     let config = match config::load_config() {
-        Ok(config) => config.get(remote),
+        Ok(config) => config.get(server),
         Err(e) => {
             eprintln!("Error loading configuration: {:?}", e);
             return;

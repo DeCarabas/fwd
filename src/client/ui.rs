@@ -1,4 +1,7 @@
-use super::{client_listen, config::ServerConfig};
+use super::{
+    client_listen,
+    config::{PortConfig, ServerConfig},
+};
 use crate::message::PortDesc;
 use anyhow::Result;
 use copypasta::{ClipboardContext, ClipboardProvider};
@@ -75,6 +78,7 @@ pub enum State {
     Enabled,
     Broken,
     Disabled,
+    Configured,
 }
 
 impl State {
@@ -86,33 +90,42 @@ impl State {
 #[derive(Debug)]
 struct Listener {
     state: std::sync::Arc<std::sync::Mutex<State>>,
+    config: Option<PortConfig>,
     stop: Option<oneshot::Sender<()>>,
     desc: Option<PortDesc>,
 }
 
 impl Listener {
-    pub fn from_desc(
-        socks_port: Option<u16>,
-        desc: PortDesc,
-        enabled: bool,
-    ) -> Listener {
+    pub fn from_desc(socks_port: Option<u16>, desc: PortDesc) -> Listener {
         let mut listener = Listener {
-            state: if enabled {
-                State::Enabled.boxed()
-            } else {
-                State::Disabled.boxed()
-            },
+            state: State::Enabled.boxed(),
+            config: None,
             stop: None,
             desc: Some(desc),
         };
-        if enabled {
-            listener.start(socks_port);
-        }
+        listener.start(socks_port);
         listener
+    }
+
+    pub fn from_config(config: PortConfig) -> Self {
+        Listener {
+            state: State::Configured.boxed(),
+            config: Some(config),
+            stop: None,
+            desc: None,
+        }
     }
 
     pub fn enabled(&self) -> bool {
         self.state() == State::Enabled
+    }
+
+    pub fn description(&self) -> &str {
+        self.config
+            .as_ref()
+            .and_then(|c| c.description.as_deref())
+            .or_else(|| self.desc.as_ref().map(|d| d.desc.as_str()))
+            .unwrap_or("")
     }
 
     fn state(&self) -> State {
@@ -130,6 +143,16 @@ impl Listener {
     }
 
     pub fn connect(&mut self, socks_port: Option<u16>, desc: PortDesc) {
+        // If we're just sitting idle and the port comes in from the remote
+        // server then we should become enabled. Otherwise we should become
+        // real, but disabled.
+        if self.state() == State::Configured {
+            if self.config.as_ref().unwrap().enabled {
+                self.state = State::Enabled.boxed();
+            } else {
+                self.state = State::Disabled.boxed();
+            }
+        }
         self.desc = Some(desc);
         self.start(socks_port);
     }
@@ -137,6 +160,13 @@ impl Listener {
     pub fn disconnect(&mut self) {
         self.desc = None;
         self.stop = None;
+
+        // When we get disconnected, but we're present in the configuration,
+        // we go back to being merely 'Configured'. If the port shows up
+        // again, our auto-enable behavior will depend on the configuration.
+        if self.config.is_some() {
+            self.state = State::Configured.boxed();
+        }
     }
 
     pub fn start(&mut self, socks_port: Option<u16>) {
@@ -185,9 +215,14 @@ pub struct UI {
 
 impl UI {
     pub fn new(events: mpsc::Receiver<UIEvent>, config: ServerConfig) -> UI {
+        let mut ports = HashMap::new();
+        for (port, config) in config.iter() {
+            ports.insert(*port, Listener::from_config(config.clone()));
+        }
+
         UI {
             events,
-            ports: HashMap::new(),
+            ports,
             socks_port: None,
             running: true,
             show_logs: false,
@@ -288,13 +323,15 @@ impl UI {
             let (symbol, style) = match listener.state() {
                 State::Enabled => (" ✓ ", enabled_port_style),
                 State::Broken => (" ✗ ", broken_port_style),
-                State::Disabled => ("", disabled_port_style),
+                State::Disabled | State::Configured => {
+                    ("", disabled_port_style)
+                }
             };
             rows.push(
                 Row::new(vec![
                     symbol,
                     &*port_strings[index],
-                    listener.desc.as_ref().map(|pd| &*pd.desc).unwrap_or(""),
+                    listener.description(),
                 ])
                 .style(style),
             );
@@ -390,11 +427,7 @@ impl UI {
     }
 
     fn enable_disable_port(&mut self, port: u16) {
-        let state = self.ports.get(&port).map(Listener::state);
-        if state == Some(State::Broken) {
-            // try turning it off and on again, it will at least get logs visible
-            self.ports.remove(&port);
-        } else if let Some(listener) = self.ports.get_mut(&port) {
+        if let Some(listener) = self.ports.get_mut(&port) {
             listener.set_enabled(self.socks_port, !listener.enabled());
         }
     }
@@ -571,24 +604,16 @@ impl UI {
                 // Grab the selected port
                 let selected_port = self.get_selected_port();
 
-                for mut port_desc in p.into_iter() {
+                for port_desc in p.into_iter() {
                     leftover_ports.remove(&port_desc.port);
                     if let Some(listener) = self.ports.get_mut(&port_desc.port)
                     {
                         listener.connect(self.socks_port, port_desc);
                     } else {
-                        let config = self.config.get(port_desc.port);
-                        info!("Port config {port_desc:?} -> {config:?}");
-                        port_desc.desc =
-                            config.description.unwrap_or(port_desc.desc);
-
+                        assert!(!self.config.contains_key(port_desc.port));
                         self.ports.insert(
                             port_desc.port,
-                            Listener::from_desc(
-                                self.socks_port,
-                                port_desc,
-                                config.enabled,
-                            ),
+                            Listener::from_desc(self.socks_port, port_desc),
                         );
                     }
                 }
@@ -961,8 +986,8 @@ mod tests {
             desc: "my-service".to_string(),
         }])));
 
-        let description = ui.ports.get(&8080).unwrap().desc.as_ref().unwrap();
-        assert_eq!(description.desc, "override");
+        let listener = ui.ports.get(&8080).unwrap();
+        assert_eq!(listener.description(), "override");
 
         drop(sender);
     }
@@ -989,6 +1014,106 @@ mod tests {
 
         let state = ui.ports.get(&8080).unwrap().state();
         assert_eq!(state, State::Disabled);
+
+        drop(sender);
+    }
+
+    #[test]
+    fn port_config_missing_but_still_there() {
+        let (sender, receiver) = mpsc::channel(64);
+        let mut config = ServerConfig::default();
+        config.insert(
+            8080,
+            PortConfig {
+                enabled: false,
+                description: Some("override".to_string()),
+            },
+        );
+
+        let mut ui = UI::new(receiver, config);
+
+        // There are no ports...
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![])));
+
+        // But there should still be ports, man.
+        let listener = ui.ports.get(&8080).unwrap();
+        assert_eq!(listener.state(), State::Configured);
+        assert_eq!(listener.description(), "override");
+
+        drop(sender);
+    }
+
+    #[test]
+    fn port_config_state_interactions() {
+        let (sender, receiver) = mpsc::channel(64);
+        let mut config = ServerConfig::default();
+        config.insert(8080, PortConfig { enabled: false, description: None });
+        config.insert(8081, PortConfig { enabled: true, description: None });
+
+        let mut ui = UI::new(receiver, config);
+
+        // No ports have been received, make sure everything's "configured"
+        assert_eq!(ui.ports.get(&8080).unwrap().state(), State::Configured);
+        assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Configured);
+
+        // 8080 shows up.... not configured as enabled so it becomes "disabled"
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![PortDesc {
+            port: 8080,
+            desc: "python3".to_string(),
+        }])));
+        assert_eq!(ui.ports.get(&8080).unwrap().state(), State::Disabled);
+        assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Configured);
+
+        // 8081 shows up.... configured as enabled so it becomes "enabled"
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![
+            PortDesc { port: 8080, desc: "python3".to_string() },
+            PortDesc { port: 8081, desc: "python3".to_string() },
+        ])));
+        assert_eq!(ui.ports.get(&8080).unwrap().state(), State::Disabled);
+        assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Enabled);
+
+        // 8082 shows up.... it should be enabled by default!
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![
+            PortDesc { port: 8080, desc: "python3".to_string() },
+            PortDesc { port: 8081, desc: "python3".to_string() },
+            PortDesc { port: 8082, desc: "python3".to_string() },
+        ])));
+        assert_eq!(ui.ports.get(&8080).unwrap().state(), State::Disabled);
+        assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Enabled);
+        assert_eq!(ui.ports.get(&8082).unwrap().state(), State::Enabled);
+
+        // 8081 goes away.... back to configured.
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![
+            PortDesc { port: 8080, desc: "python3".to_string() },
+            PortDesc { port: 8082, desc: "python3".to_string() },
+        ])));
+        assert_eq!(ui.ports.get(&8080).unwrap().state(), State::Disabled);
+        assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Configured);
+        assert_eq!(ui.ports.get(&8082).unwrap().state(), State::Enabled);
+
+        // All gone, state resets itself.
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![])));
+        assert_eq!(ui.ports.get(&8080).unwrap().state(), State::Configured);
+        assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Configured);
+        assert!(!ui.ports.contains_key(&8082));
+
+        drop(sender);
+    }
+
+    #[test]
+    fn port_defaults_respected() {
+        let (sender, receiver) = mpsc::channel(64);
+        let config = ServerConfig::default();
+        let mut ui = UI::new(receiver, config);
+
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![PortDesc {
+            port: 8080,
+            desc: "python3".to_string(),
+        }])));
+
+        let listener = ui.ports.get(&8080).unwrap();
+        assert_eq!(listener.state(), State::Enabled);
+        assert_eq!(listener.description(), "python3");
 
         drop(sender);
     }

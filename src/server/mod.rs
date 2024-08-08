@@ -26,12 +26,26 @@ async fn server_loop<Reader: AsyncRead + Unpin>(
 ) -> Result<()> {
     // The first message we send must be an announcement.
     writer.send(Message::Hello(0, 2, vec![])).await?;
-
+    let mut version_reported = false;
     loop {
         use Message::*;
         match reader.read().await? {
             Ping => (),
             Refresh => {
+                // Just log the version, if we haven't yet. We do this extra
+                // work to avoid spamming the log, but we wait until we
+                // receive the first message to be sure that the client is in
+                // a place to display our logging properly.
+                if !version_reported {
+                    eprintln!(
+                        "fwd server {} (rev {}{})",
+                        crate::VERSION,
+                        crate::REV,
+                        crate::DIRTY
+                    );
+                    version_reported = true;
+                }
+
                 let ports = match refresh::get_entries().await {
                     Ok(ports) => ports,
                     Err(e) => {

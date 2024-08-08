@@ -1,7 +1,6 @@
 use crate::message::{Message, MessageReader, MessageWriter};
 use anyhow::{bail, Result};
 use bytes::BytesMut;
-use copypasta::{ClipboardContext, ClipboardProvider};
 use log::LevelFilter;
 use log::{debug, error, info, warn};
 use std::collections::HashMap;
@@ -213,16 +212,11 @@ async fn client_handle_messages<T: AsyncRead + Unpin>(
             }
 
             ClipStart(id) => {
-                info!("Starting clip op {id}");
                 clipboard_messages.insert(id, Vec::new());
             }
 
             ClipData(id, mut data) => match clipboard_messages.get_mut(&id) {
                 Some(bytes) => {
-                    info!(
-                        "Received data for clip op {id} ({len} bytes)",
-                        len = data.len()
-                    );
                     if bytes.len() < MAX_CLIPBOARD_SIZE {
                         bytes.append(&mut data);
                     }
@@ -243,9 +237,10 @@ async fn client_handle_messages<T: AsyncRead + Unpin>(
                     continue;
                 };
 
-                let mut ctx = ClipboardContext::new().unwrap();
-                if let Err(e) = ctx.set_contents(data) {
-                    error!("Unable to set clipboard data for op {id}: {e:?}");
+                if let Err(e) =
+                    events.send(ui::UIEvent::SetClipboard(data)).await
+                {
+                    error!("Error sending clipboard request: {:?}", e);
                 }
             }
 

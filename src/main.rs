@@ -1,10 +1,6 @@
 // TODO: An actual proper command line parsing
 use indoc::indoc;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-const REV: &str = env!("REPO_REV");
-const DIRTY: &str = env!("REPO_DIRTY");
-
 fn usage() {
     println!(indoc! {"
 usage: fwd [options] (<server> | browse <url> | clip [<file>])
@@ -121,7 +117,7 @@ fn parse_args(args: Vec<String>) -> Args {
 async fn browse_url(url: &str) {
     if let Err(e) = fwd::browse_url(url).await {
         eprintln!("Unable to open {url}");
-        eprintln!("{}", e);
+        eprintln!("{:#}", e);
         std::process::exit(1);
     }
 }
@@ -129,7 +125,7 @@ async fn browse_url(url: &str) {
 async fn clip_file(file: String) {
     if let Err(e) = fwd::clip_file(&file).await {
         eprintln!("Unable to copy to the clipboard");
-        eprintln!("{}", e);
+        eprintln!("{:#}", e);
         std::process::exit(1);
     }
 }
@@ -141,7 +137,7 @@ async fn main() {
             usage();
         }
         Args::Version => {
-            println!("fwd {VERSION} (rev {REV}{DIRTY})");
+            println!("fwd {} (rev {}{})", fwd::VERSION, fwd::REV, fwd::DIRTY);
         }
         Args::Server => {
             fwd::run_server().await;

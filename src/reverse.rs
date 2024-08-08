@@ -6,16 +6,28 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 mod unix;
 
 #[cfg(target_family = "unix")]
-pub use unix::{handle_reverse_connections, send_reverse_message};
+pub use unix::{handle_reverse_connections, ReverseConnection};
 
 use crate::message::Message;
 
 #[cfg(not(target_family = "unix"))]
-pub async fn send_reverse_message(_message: Message) -> Result<()> {
-    use anyhow::anyhow;
-    Err(anyhow!(
-        "Server-side operations are not supported on this platform"
-    ))
+pub struct ReverseConnection {}
+
+#[cfg(not(target_family = "unix"))]
+impl ReverseConnection {
+    pub async fn new() -> Result<Self> {
+        use anyhow::anyhow;
+        Err(anyhow!(
+            "Server-side operations are not supported on this platform"
+        ))
+    }
+
+    pub async fn send(&mut self, message: Message) -> Result<()> {
+        use anyhow::anyhow;
+        Err(anyhow!(
+            "Server-side operations are not supported on this platform"
+        ))
+    }
 }
 
 #[cfg(not(target_family = "unix"))]
@@ -27,12 +39,16 @@ pub async fn handle_reverse_connections(
 
 #[inline]
 pub async fn browse_url(url: &str) -> Result<()> {
-    send_reverse_message(Message::Browse(url.to_string())).await
+    ReverseConnection::new()
+        .await?
+        .send(Message::Browse(url.to_string()))
+        .await
 }
 
 async fn clip_reader<T: AsyncRead + Unpin>(reader: &mut T) -> Result<()> {
+    let mut connection = ReverseConnection::new().await?;
     let clip_id: u64 = random();
-    send_reverse_message(Message::ClipStart(clip_id)).await?;
+    connection.send(Message::ClipStart(clip_id)).await?;
 
     let mut count = 0;
     let mut buf = vec![0; 1024];
@@ -43,7 +59,7 @@ async fn clip_reader<T: AsyncRead + Unpin>(reader: &mut T) -> Result<()> {
         }
         count += read;
         if count == buf.len() {
-            send_reverse_message(Message::ClipData(clip_id, buf)).await?;
+            connection.send(Message::ClipData(clip_id, buf)).await?;
             buf = vec![0; 1024];
             count = 0;
         }
@@ -51,10 +67,10 @@ async fn clip_reader<T: AsyncRead + Unpin>(reader: &mut T) -> Result<()> {
 
     if count > 0 {
         buf.resize(count, 0);
-        send_reverse_message(Message::ClipData(clip_id, buf)).await?;
+        connection.send(Message::ClipData(clip_id, buf)).await?;
     }
 
-    send_reverse_message(Message::ClipEnd(clip_id)).await?;
+    connection.send(Message::ClipEnd(clip_id)).await?;
     Ok(())
 }
 

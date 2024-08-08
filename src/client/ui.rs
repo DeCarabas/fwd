@@ -1,6 +1,7 @@
 use super::{client_listen, config::ServerConfig};
 use crate::message::PortDesc;
 use anyhow::Result;
+use copypasta::{ClipboardContext, ClipboardProvider};
 use crossterm::{
     event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers},
     execute,
@@ -33,6 +34,7 @@ pub enum UIEvent {
     ServerLine(String),
     LogLine(log::Level, String),
     Ports(Vec<PortDesc>),
+    SetClipboard(String),
 }
 
 pub enum UIReturn {
@@ -166,7 +168,6 @@ impl Listener {
     }
 }
 
-#[derive(Debug)]
 pub struct UI {
     events: mpsc::Receiver<UIEvent>,
     ports: HashMap<u16, Listener>,
@@ -179,6 +180,7 @@ pub struct UI {
     show_help: bool,
     alternate_screen: bool,
     raw_mode: bool,
+    clipboard: ClipboardContext,
 }
 
 impl UI {
@@ -195,6 +197,8 @@ impl UI {
             config,
             alternate_screen: false,
             raw_mode: false,
+            clipboard: ClipboardContext::new()
+                .expect("Unable to initialize clipboard context"),
         }
     }
 
@@ -620,6 +624,14 @@ impl UI {
                     self.lines.pop_front();
                 }
                 self.lines.push_back(format!("[CLIENT] {line}"));
+            }
+            Some(UIEvent::SetClipboard(contents)) => {
+                let length = contents.len();
+                if let Err(e) = self.clipboard.set_contents(contents) {
+                    error!("Error setting clipboard contents: {e:#}");
+                } else {
+                    info!("Received clipboard contents ({length} bytes)");
+                }
             }
             None => {
                 self.running = false;

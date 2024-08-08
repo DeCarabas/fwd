@@ -9,32 +9,27 @@ use tokio::sync::mpsc;
 
 use crate::message::{Message, MessageReader, MessageWriter};
 
-pub async fn send_reverse_message(message: Message) -> Result<()> {
-    let path = socket_path().context("Error getting socket path")?;
-    let stream = match UnixStream::connect(&path).await {
-        Ok(s) => s,
-        Err(e) => bail!(
-            "Error connecting to socket: {e} (is fwd actually connected here?)"
-        ),
-    };
-    let mut writer = MessageWriter::new(stream);
-    writer
-        .write(message)
-        .await
-        .context("Error sending browse message")?;
-    Ok(())
+pub struct ReverseConnection {
+    writer: MessageWriter<UnixStream>,
 }
 
-fn socket_directory() -> Result<std::path::PathBuf> {
-    let base_directories = xdg::BaseDirectories::new()
-        .context("Error creating BaseDirectories")?;
-    match base_directories.place_runtime_file("fwd") {
-        Ok(path) => Ok(path),
-        Err(_) => {
-            let mut path = std::env::temp_dir();
-            path.push(format!("fwd{}", users::get_current_uid()));
-            Ok(path)
-        }
+impl ReverseConnection {
+    pub async fn new() -> Result<Self> {
+        let path = socket_path().context("Error getting socket path")?;
+        let stream = match UnixStream::connect(&path).await {
+            Ok(s) => s,
+            Err(e) => bail!("Error connecting to socket: {e} (is fwd actually connected here?)"),
+        };
+
+        Ok(ReverseConnection { writer: MessageWriter::new(stream) })
+    }
+
+    pub async fn send(&mut self, message: Message) -> Result<()> {
+        self.writer
+            .write(message)
+            .await
+            .context("Error sending reverse message")?;
+        Ok(())
     }
 }
 
@@ -51,6 +46,19 @@ pub fn socket_path() -> Result<PathBuf> {
 
     socket_path.push("browser");
     Ok(socket_path)
+}
+
+fn socket_directory() -> Result<std::path::PathBuf> {
+    let base_directories = xdg::BaseDirectories::new()
+        .context("Error creating BaseDirectories")?;
+    match base_directories.place_runtime_file("fwd") {
+        Ok(path) => Ok(path),
+        Err(_) => {
+            let mut path = std::env::temp_dir();
+            path.push(format!("fwd{}", users::get_current_uid()));
+            Ok(path)
+        }
+    }
 }
 
 pub async fn handle_reverse_connections(
@@ -87,10 +95,18 @@ async fn handle_connection(
     sender: mpsc::Sender<Message>,
 ) -> Result<()> {
     let mut reader = MessageReader::new(socket);
-    let message = reader.read().await.context("Error reading message")?;
-    match message {
-        Message::Browse(url) => sender.send(Message::Browse(url)).await?,
-        _ => bail!("Unsupported message: {:?}", message),
+    while let Ok(message) = reader.read().await {
+        match message {
+            Message::Browse(url) => sender.send(Message::Browse(url)).await?,
+            Message::ClipStart(id) => {
+                sender.send(Message::ClipStart(id)).await?
+            }
+            Message::ClipData(id, data) => {
+                sender.send(Message::ClipData(id, data)).await?
+            }
+            Message::ClipEnd(id) => sender.send(Message::ClipEnd(id)).await?,
+            _ => bail!("Unsupported message: {:?}", message),
+        }
     }
 
     Ok(())

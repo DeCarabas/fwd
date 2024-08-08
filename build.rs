@@ -52,8 +52,9 @@ fn emit_git_commit() {
         eprintln!("`git rev-parse --short HEAD` failed, stderr: {stderr}");
         panic!("`git rev-parse --short HEAD` failed");
     }
-    let rev =
-        std::str::from_utf8(&output.stdout).expect("git did not output utf8");
+    let rev = std::str::from_utf8(&output.stdout)
+        .expect("git did not output utf8")
+        .trim();
 
     println!("cargo::rustc-env=REPO_REV={rev}");
 }
@@ -86,13 +87,20 @@ fn emit_git_dirty() {
     // If there *was* any output, parse it and tell cargo to re-run if any of
     // these files changed. (Maybe they get reverted! Then the repo status
     // will change.)
-    for line in output.lines() {
-        let fields: Vec<_> = line.split('\x00').collect();
-        let parts: Vec<_> = fields[0].split(' ').collect();
-        let path = parts[1];
-        println!("cargo::rerun-if-changed={path}");
+    let mut split = output.split('\x00');
+    while let Some(field) = split.next() {
+        if field.is_empty() {
+            continue;
+        }
+        let prefix = &field[0..3];
+        println!("cargo::rerun-if-changed={}", &field[3..]);
+        let b = prefix.as_bytes();
+        if b[0] == b'R' || b[1] == b'R' || b[0] == b'C' || b[1] == b'C' {
+            if let Some(additional) = split.next() {
+                println!("cargo::rerun-if-changed={additional}");
+            }
+        }
     }
-
     // Emit the repository status.
     let dirty = if output.trim().is_empty() {
         ""

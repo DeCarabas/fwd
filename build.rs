@@ -84,23 +84,6 @@ fn emit_git_dirty() {
     let output =
         std::str::from_utf8(&output.stdout).expect("git did not output utf8");
 
-    // If there *was* any output, parse it and tell cargo to re-run if any of
-    // these files changed. (Maybe they get reverted! Then the repo status
-    // will change.)
-    let mut split = output.split('\x00');
-    while let Some(field) = split.next() {
-        if field.is_empty() {
-            continue;
-        }
-        let prefix = &field[0..3];
-        println!("cargo::rerun-if-changed={}", &field[3..]);
-        let b = prefix.as_bytes();
-        if b[0] == b'R' || b[1] == b'R' || b[0] == b'C' || b[1] == b'C' {
-            if let Some(additional) = split.next() {
-                println!("cargo::rerun-if-changed={additional}");
-            }
-        }
-    }
     // Emit the repository status.
     let dirty = if output.trim().is_empty() {
         ""
@@ -108,6 +91,33 @@ fn emit_git_dirty() {
         " *dirty*"
     };
     println!("cargo::rustc-env=REPO_DIRTY={dirty}");
+
+    // NOW: The output here has to do with *all* of the files in the git
+    //      respository. (Because if nothing was modified, but then *becomes*
+    //      modified, we need to rerun the script to notice the dirty bit.)
+    //      `git-ls-files` is the way to do that.
+    let output = std::process::Command::new("git")
+        .arg("ls-files")
+        .arg("-z")
+        .arg("--cached")
+        .arg("--deleted")
+        .arg("--modified")
+        .arg("--others")
+        .arg("--exclude-standard")
+        .output()
+        .expect("could not spawn `git` to get repository status");
+    if !output.status.success() {
+        let stderr = std::str::from_utf8(&output.stderr)
+            .expect("git failed and stderr was not utf-8");
+        eprintln!("`git ls-files` failed, stderr: {stderr}");
+        panic!("`git ls-files` failed");
+    }
+    let output =
+        std::str::from_utf8(&output.stdout).expect("git did not output utf8");
+
+    for fname in output.split_terminator("\0") {
+        println!("cargo::rerun-if-changed={fname}");
+    }
 }
 
 fn main() {

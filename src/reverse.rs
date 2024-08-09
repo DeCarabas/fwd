@@ -22,7 +22,7 @@ impl ReverseConnection {
         ))
     }
 
-    pub async fn send(&mut self, message: Message) -> Result<()> {
+    pub async fn send(&mut self, _message: Message) -> Result<()> {
         use anyhow::anyhow;
         Err(anyhow!(
             "Server-side operations are not supported on this platform"

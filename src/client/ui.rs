@@ -78,7 +78,6 @@ pub enum State {
     Enabled,
     Broken,
     Disabled,
-    Configured,
 }
 
 impl State {
@@ -109,7 +108,11 @@ impl Listener {
 
     pub fn from_config(config: PortConfig) -> Self {
         Listener {
-            state: State::Configured.boxed(),
+            state: if config.enabled {
+                State::Enabled.boxed()
+            } else {
+                State::Disabled.boxed()
+            },
             config: Some(config),
             stop: None,
             desc: None,
@@ -146,13 +149,6 @@ impl Listener {
         // If we're just sitting idle and the port comes in from the remote
         // server then we should become enabled. Otherwise we should become
         // real, but disabled.
-        if self.state() == State::Configured {
-            if self.config.as_ref().unwrap().enabled {
-                self.state = State::Enabled.boxed();
-            } else {
-                self.state = State::Disabled.boxed();
-            }
-        }
         self.desc = Some(desc);
         self.start(socks_port);
     }
@@ -160,13 +156,6 @@ impl Listener {
     pub fn disconnect(&mut self) {
         self.desc = None;
         self.stop = None;
-
-        // When we get disconnected, but we're present in the configuration,
-        // we go back to being merely 'Configured'. If the port shows up
-        // again, our auto-enable behavior will depend on the configuration.
-        if self.config.is_some() {
-            self.state = State::Configured.boxed();
-        }
     }
 
     pub fn start(&mut self, socks_port: Option<u16>) {
@@ -323,9 +312,7 @@ impl UI {
             let (symbol, style) = match listener.state() {
                 State::Enabled => (" ✓ ", enabled_port_style),
                 State::Broken => (" ✗ ", broken_port_style),
-                State::Disabled | State::Configured => {
-                    ("", disabled_port_style)
-                }
+                State::Disabled => ("", disabled_port_style),
             };
             rows.push(
                 Row::new(vec![
@@ -1037,7 +1024,7 @@ mod tests {
 
         // But there should still be ports, man.
         let listener = ui.ports.get(&8080).unwrap();
-        assert_eq!(listener.state(), State::Configured);
+        assert_eq!(listener.state(), State::Disabled);
         assert_eq!(listener.description(), "override");
 
         drop(sender);
@@ -1052,17 +1039,17 @@ mod tests {
 
         let mut ui = UI::new(receiver, config);
 
-        // No ports have been received, make sure everything's "configured"
-        assert_eq!(ui.ports.get(&8080).unwrap().state(), State::Configured);
-        assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Configured);
+        // No ports have been received, make sure everything's in its default state.
+        assert_eq!(ui.ports.get(&8080).unwrap().state(), State::Disabled);
+        assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Enabled);
 
-        // 8080 shows up.... not configured as enabled so it becomes "disabled"
+        // 8080 shows up.... doesn't affect anything.
         ui.handle_internal_event(Some(UIEvent::Ports(vec![PortDesc {
             port: 8080,
             desc: "python3".to_string(),
         }])));
         assert_eq!(ui.ports.get(&8080).unwrap().state(), State::Disabled);
-        assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Configured);
+        assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Enabled);
 
         // 8081 shows up.... configured as enabled so it becomes "enabled"
         ui.handle_internal_event(Some(UIEvent::Ports(vec![
@@ -1082,19 +1069,19 @@ mod tests {
         assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Enabled);
         assert_eq!(ui.ports.get(&8082).unwrap().state(), State::Enabled);
 
-        // 8081 goes away.... back to configured.
+        // 8081 goes away....
         ui.handle_internal_event(Some(UIEvent::Ports(vec![
             PortDesc { port: 8080, desc: "python3".to_string() },
             PortDesc { port: 8082, desc: "python3".to_string() },
         ])));
         assert_eq!(ui.ports.get(&8080).unwrap().state(), State::Disabled);
-        assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Configured);
+        assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Enabled);
         assert_eq!(ui.ports.get(&8082).unwrap().state(), State::Enabled);
 
         // All gone, state resets itself.
         ui.handle_internal_event(Some(UIEvent::Ports(vec![])));
-        assert_eq!(ui.ports.get(&8080).unwrap().state(), State::Configured);
-        assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Configured);
+        assert_eq!(ui.ports.get(&8080).unwrap().state(), State::Disabled);
+        assert_eq!(ui.ports.get(&8081).unwrap().state(), State::Enabled);
         assert!(!ui.ports.contains_key(&8082));
 
         drop(sender);

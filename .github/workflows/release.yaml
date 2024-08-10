@@ -46,8 +46,6 @@ jobs:
       TARGET_DIR: ./target
       # Emit backtraces on panics.
       RUST_BACKTRACE: 1
-      # Build static releases with PCRE2.
-      PCRE2_SYS_STATIC: 1
 
     strategy:
       matrix:
@@ -55,32 +53,27 @@ jobs:
         include:
         - build: linux
           os: ubuntu-22.04
-          rust: nightly
           target: x86_64-unknown-linux-musl
 
         - build: macos
           os: macos-12
-          rust: nightly
           target: x86_64-apple-darwin
 
         - build: arm-macos
           os: macos-12
-          rust: nightly
           target: aarch64-apple-darwin
 
         - build: windows
           os: windows-2022
-          rust: nightly
           target: x86_64-pc-windows-msvc
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@master
+      uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: ${{ matrix.rust }}
         target: ${{ matrix.target }}
 
     - name: Use Cross

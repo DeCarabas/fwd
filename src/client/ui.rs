@@ -1178,4 +1178,30 @@ mod tests {
 
         drop(sender);
     }
+
+    #[test]
+    fn empty_port_desc_disabled_on_refresh() {
+        let (sender, receiver) = mpsc::channel(64);
+        let config = ServerConfig::default();
+        let mut ui = UI::new(receiver, config);
+
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![PortDesc {
+            port: 8080,
+            desc: "".to_string(),
+        }])));
+
+        let listener = ui.ports.get(&8080).unwrap();
+        assert_eq!(listener.state(), State::Disabled);
+
+        // Just do it again, make sure we haven't broken the refresh path.
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![PortDesc {
+            port: 8080,
+            desc: "".to_string(),
+        }])));
+
+        let listener = ui.ports.get(&8080).unwrap();
+        assert_eq!(listener.state(), State::Disabled);
+
+        drop(sender);
+    }
 }

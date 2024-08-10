@@ -24,6 +24,15 @@ async fn server_loop<Reader: AsyncRead + Unpin>(
     reader: &mut MessageReader<Reader>,
     writer: &mut mpsc::Sender<Message>,
 ) -> Result<()> {
+    // NOTE: The client needs to opt in to getting anonymous ports because it
+    // does not feel safe to automatically enable port forwarding by default
+    // for random system ports. The way we keep it from being unsafe is that
+    // the client leaves anonymous ports disabled by default. Older clients
+    // did not do this, and so we cannot send older clients anonymous ports.
+    let send_anonymous = std::env::var("FWD_SEND_ANONYMOUS")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+
     // The first message we send must be an announcement.
     writer.send(Message::Hello(0, 2, vec![])).await?;
     let mut version_reported = false;
@@ -46,7 +55,7 @@ async fn server_loop<Reader: AsyncRead + Unpin>(
                     version_reported = true;
                 }
 
-                let ports = match refresh::get_entries().await {
+                let ports = match refresh::get_entries(send_anonymous).await {
                     Ok(ports) => ports,
                     Err(e) => {
                         error!("Error scanning: {:?}", e);

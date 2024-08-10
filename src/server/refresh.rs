@@ -12,7 +12,7 @@ mod procfs;
 #[cfg(unix)]
 mod docker;
 
-pub async fn get_entries() -> Result<Vec<PortDesc>> {
+pub async fn get_entries(_send_anonymous: bool) -> Result<Vec<PortDesc>> {
     #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut attempts = 0;
 
@@ -35,7 +35,7 @@ pub async fn get_entries() -> Result<Vec<PortDesc>> {
     #[cfg(target_os = "linux")]
     {
         attempts += 1;
-        match procfs::get_entries() {
+        match procfs::get_entries(_send_anonymous) {
             Ok(m) => {
                 for (p, d) in m {
                     result.entry(p).or_insert(d);

@@ -334,6 +334,7 @@ async fn spawn_ssh(
         cmd.arg("sudo");
     }
     cmd.arg(format!("FWD_LOG={log_filter}"))
+        .arg("FWD_SEND_ANONYMOUS=1")
         .arg("fwd")
         .arg("--server");
 

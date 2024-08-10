@@ -99,8 +99,7 @@ impl Message {
                     result.put_u16(port.port);
 
                     // Port descriptions can be long, let's make sure they're not.
-                    let sliced =
-                        slice_up_to(&port.desc, u16::max_value().into());
+                    let sliced = slice_up_to(&port.desc, u16::MAX.into());
                     put_string(result, sliced);
                 }
             }

@@ -476,15 +476,14 @@ impl UI {
         ev: Option<Result<Event, std::io::Error>>,
     ) {
         match ev {
-            Some(Ok(Event::Key(ev))) => match ev {
+            Some(Ok(Event::Key(
                 KeyEvent { code: KeyCode::Esc, .. }
                 | KeyEvent { code: KeyCode::Char('q'), .. }
                 | KeyEvent { code: KeyCode::Char('?'), .. }
-                | KeyEvent { code: KeyCode::Char('h'), .. } => {
-                    self.show_help = false;
-                }
-                _ => (),
-            },
+                | KeyEvent { code: KeyCode::Char('h'), .. },
+            ))) => {
+                self.show_help = false;
+            }
             Some(Ok(_)) => (), // Don't care about this event...
             Some(Err(_)) => (), // Hmmmmmm.....?
             None => (),        // ....no events? what?

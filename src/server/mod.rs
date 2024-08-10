@@ -114,7 +114,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, DuplexStream};
 
     async fn sync(client_read: &mut DuplexStream) {
-        print!("[client] Waiting for server sync...\n");
+        println!("[client] Waiting for server sync...");
         for _ in 0..8 {
             let b = client_read
                 .read_u8()
@@ -124,7 +124,7 @@ mod tests {
         }
 
         let mut reader = MessageReader::new(client_read);
-        print!("[client] Reading first message...\n");
+        println!("[client] Reading first message...");
         let msg = reader.read().await.expect("Error reading first message");
         assert_matches!(msg, Message::Hello(0, 2, _));
     }

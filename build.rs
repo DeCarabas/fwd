@@ -21,14 +21,36 @@ fn file_contents<P: AsRef<Path>>(path: P) -> String {
     std::fs::read_to_string(path).expect("Unable to read file")
 }
 
+fn git_rel<P: AsRef<Path>>(path: P) -> PathBuf {
+    let output = std::process::Command::new("git")
+        .arg("rev-parse")
+        .arg("--show-toplevel")
+        .output()
+        .expect("Error launching git rev-parse");
+    if !output.status.success() {
+        let stderr = std::str::from_utf8(&output.stderr)
+            .expect("git failed and stderr was not utf8");
+        eprintln!("`git rev-parse --show-toplevel` failed, stderr: {stderr}");
+        panic!("`git rev-parse --show-toplevel` failed");
+    }
+
+    let mut root = PathBuf::from(
+        std::str::from_utf8(&output.stdout)
+            .expect("Output was not utf-8")
+            .trim(),
+    );
+    root.push(path);
+    root
+}
+
 /// Emit the current git commit.
 fn emit_git_commit() {
     // Fetch the current commit from the head. We do it this way instead of
     // asking `git rev-parse` to do it for us because we want to reliably
     // tell cargo which files it should monitor for changes.
-    let head = file_contents("./.git/HEAD");
+    let head = file_contents(git_rel(".git/HEAD"));
     let rev = if let Some(r) = head.strip_prefix("ref: ") {
-        let mut ref_path = PathBuf::from("./.git/");
+        let mut ref_path = git_rel(".git/");
         ref_path.push(r.trim());
         file_contents(ref_path)
     } else {

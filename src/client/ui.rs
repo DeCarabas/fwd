@@ -13,7 +13,7 @@ use crossterm::{
         EnterAlternateScreen, LeaveAlternateScreen,
     },
 };
-use log::{error, info, Level, Metadata, Record};
+use log::{error, info, warn, Level, Metadata, Record};
 use std::collections::vec_deque::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::io::stdout;
@@ -218,7 +218,7 @@ pub struct UI {
     show_help: bool,
     alternate_screen: bool,
     raw_mode: bool,
-    clipboard: ClipboardContext,
+    clipboard: Option<ClipboardContext>,
 }
 
 impl UI {
@@ -227,6 +227,8 @@ impl UI {
         for (port, config) in config.iter() {
             ports.insert(*port, Listener::from_config(config.clone()));
         }
+
+        let clipboard = ClipboardContext::new().ok();
 
         UI {
             events,
@@ -240,8 +242,7 @@ impl UI {
             config,
             alternate_screen: false,
             raw_mode: false,
-            clipboard: ClipboardContext::new()
-                .expect("Unable to initialize clipboard context"),
+            clipboard,
         }
     }
 
@@ -672,10 +673,14 @@ impl UI {
             }
             Some(UIEvent::SetClipboard(contents)) => {
                 let length = contents.len();
-                if let Err(e) = self.clipboard.set_contents(contents) {
-                    error!("Error setting clipboard contents: {e:#}");
+                if let Some(clipboard) = self.clipboard.as_mut() {
+                    if let Err(e) = clipboard.set_contents(contents) {
+                        error!("Error setting clipboard contents: {e:#}");
+                    } else {
+                        info!("Received clipboard contents ({length} bytes)");
+                    }
                 } else {
-                    info!("Received clipboard contents ({length} bytes)");
+                    warn!("No clipboard available, contents discarded");
                 }
             }
             None => {

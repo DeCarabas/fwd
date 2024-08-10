@@ -132,11 +132,22 @@ impl Listener {
     }
 
     pub fn description(&self) -> &str {
-        self.config
-            .as_ref()
-            .and_then(|c| c.description.as_deref())
-            .or_else(|| self.desc.as_ref().map(|d| d.desc.as_str()))
-            .unwrap_or("")
+        if let Some(config) = self.config.as_ref() {
+            if let Some(description) = config.description.as_deref() {
+                return description;
+            }
+        }
+
+        if let Some(port) = self.desc.as_ref() {
+            let desc = port.desc.as_str();
+            return if desc.is_empty() {
+                "<unknown process>"
+            } else {
+                desc
+            };
+        }
+
+        ""
     }
 
     fn state(&self) -> State {
@@ -1158,6 +1169,7 @@ mod tests {
 
         let listener = ui.ports.get(&8080).unwrap();
         assert_eq!(listener.state(), State::Disabled);
+        assert_eq!(listener.description(), "<unknown process>");
 
         drop(sender);
     }

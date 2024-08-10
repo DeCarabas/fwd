@@ -605,12 +605,21 @@ impl UI {
                         listener.connect(self.socks_port, port_desc);
                     } else {
                         assert!(!self.config.contains_key(port_desc.port));
+
+                        // The server can send us these ports it knows nothing about.
+                        // These might be dangerous to enable by default, so don't.
+                        let enabled = if port_desc.desc.is_empty() {
+                            false
+                        } else {
+                            self.config.auto()
+                        };
+
                         self.ports.insert(
                             port_desc.port,
                             Listener::from_desc(
                                 self.socks_port,
                                 port_desc,
-                                self.config.auto(),
+                                enabled,
                             ),
                         );
                     }
@@ -1132,6 +1141,23 @@ mod tests {
         let listener = ui.ports.get(&8080).unwrap();
         assert_eq!(listener.state(), State::Disabled);
         assert_eq!(listener.description(), "python3");
+
+        drop(sender);
+    }
+
+    #[test]
+    fn empty_port_desc_disabled_by_default() {
+        let (sender, receiver) = mpsc::channel(64);
+        let config = ServerConfig::default();
+        let mut ui = UI::new(receiver, config);
+
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![PortDesc {
+            port: 8080,
+            desc: "".to_string(),
+        }])));
+
+        let listener = ui.ports.get(&8080).unwrap();
+        assert_eq!(listener.state(), State::Disabled);
 
         drop(sender);
     }

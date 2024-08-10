@@ -95,9 +95,17 @@ struct Listener {
 }
 
 impl Listener {
-    pub fn from_desc(socks_port: Option<u16>, desc: PortDesc) -> Listener {
+    pub fn from_desc(
+        socks_port: Option<u16>,
+        desc: PortDesc,
+        enabled: bool,
+    ) -> Listener {
         let mut listener = Listener {
-            state: State::Enabled.boxed(),
+            state: if enabled {
+                State::Enabled.boxed()
+            } else {
+                State::Disabled.boxed()
+            },
             config: None,
             stop: None,
             desc: Some(desc),
@@ -599,7 +607,11 @@ impl UI {
                         assert!(!self.config.contains_key(port_desc.port));
                         self.ports.insert(
                             port_desc.port,
-                            Listener::from_desc(self.socks_port, port_desc),
+                            Listener::from_desc(
+                                self.socks_port,
+                                port_desc,
+                                self.config.auto(),
+                            ),
                         );
                     }
                 }
@@ -1099,6 +1111,26 @@ mod tests {
 
         let listener = ui.ports.get(&8080).unwrap();
         assert_eq!(listener.state(), State::Enabled);
+        assert_eq!(listener.description(), "python3");
+
+        drop(sender);
+    }
+
+    #[test]
+    fn port_default_disabled_respected() {
+        let (sender, receiver) = mpsc::channel(64);
+        let mut config = ServerConfig::default();
+        config.set_auto(false);
+
+        let mut ui = UI::new(receiver, config);
+
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![PortDesc {
+            port: 8080,
+            desc: "python3".to_string(),
+        }])));
+
+        let listener = ui.ports.get(&8080).unwrap();
+        assert_eq!(listener.state(), State::Disabled);
         assert_eq!(listener.description(), "python3");
 
         drop(sender);

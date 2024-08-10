@@ -22,8 +22,17 @@ impl ServerConfig {
     }
 
     #[cfg(test)]
+    pub fn set_auto(&mut self, auto: bool) {
+        self.auto = auto;
+    }
+
+    #[cfg(test)]
     pub fn insert(&mut self, port: u16, config: PortConfig) {
         self.ports.insert(port, config);
+    }
+
+    pub fn auto(&self) -> bool {
+        self.auto
     }
 
     pub fn iter(&self) -> hash_map::Iter<u16, PortConfig> {
@@ -32,13 +41,6 @@ impl ServerConfig {
 
     pub fn contains_key(&self, port: u16) -> bool {
         self.ports.contains_key(&port)
-    }
-
-    pub fn get(&self, port: u16) -> PortConfig {
-        match self.ports.get(&port) {
-            None => PortConfig { enabled: self.auto, description: None },
-            Some(c) => c.clone(),
-        }
     }
 }
 

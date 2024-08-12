@@ -105,8 +105,14 @@ impl JsonValue {
     pub fn parse(blob: &[u8]) -> Result<Self> {
         Self::parse_impl(blob).with_context(|| {
             match std::str::from_utf8(blob) {
-                Ok(s) => format!("Failed to parse: {s}"),
-                Err(_) => format!("Failed to parse {blob:?}"),
+                Ok(s) => format!("Failed to parse {} bytes: '{}'", s.len(), s),
+                Err(_) => {
+                    format!(
+                        "Failed to parse {} bytes (not utf-8): {:?}",
+                        blob.len(),
+                        blob
+                    )
+                }
             }
         })
     }
@@ -295,10 +301,11 @@ impl JsonValue {
             }
         }
 
-        match stack.pop().expect("underflow somehow") {
-            Tok::Val(v) => Ok(v),
-            Tok::StartObject => bail!("unterminated object"),
-            Tok::StartArray => bail!("unterminated array"),
+        match stack.pop() {
+            Some(Tok::Val(v)) => Ok(v),
+            Some(Tok::StartObject) => bail!("unterminated object"),
+            Some(Tok::StartArray) => bail!("unterminated array"),
+            None => bail!("No JSON found in input"),
         }
     }
 
@@ -499,6 +506,11 @@ mod test {
             }
             eprintln!("Parsed {path} successfully");
         }
+    }
+
+    #[test]
+    pub fn json_decode_empty() {
+        assert!(JsonValue::parse(b"   ").is_err());
     }
 
     #[test]

@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use log::trace;
 use std::collections::HashMap;
 use tokio::io::{
     AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
@@ -26,6 +27,7 @@ Accept: */*\r\n\
     // Check the HTTP response.
     let mut line = String::new();
     stream.read_line(&mut line).await?;
+    trace!("[docker] {}", line.trim_end());
     let parts: Vec<&str> = line.split(" ").collect();
     if parts.len() < 2 || parts[1] != "200" {
         bail!("Error response from docker: {line}");
@@ -36,6 +38,7 @@ Accept: */*\r\n\
     loop {
         line.clear();
         stream.read_line(&mut line).await?;
+        trace!("[docker] {}", line.trim_end());
         if line.trim().is_empty() {
             break;
         }
@@ -49,6 +52,17 @@ Accept: */*\r\n\
     let mut response_buffer = vec![0; content_length];
     stream.read_exact(&mut response_buffer).await?;
 
+    if log::log_enabled!(log::Level::Trace) {
+        match std::str::from_utf8(&response_buffer) {
+            Ok(s) => trace!("[docker][{}b] {}", s.len(), s),
+            Err(_) => trace!(
+                "[docker][{}b, raw] {:?}",
+                response_buffer.len(),
+                &response_buffer
+            ),
+        }
+    }
+
     // Done with the stream.
     Ok(response_buffer)
 }
@@ -56,6 +70,7 @@ Accept: */*\r\n\
 async fn list_containers() -> Result<Vec<u8>> {
     let host = std::env::var("DOCKER_HOST")
         .unwrap_or_else(|_| DEFAULT_DOCKER_HOST.to_string());
+    trace!("[docker] Connecting to {host}");
     match host {
         h if h.starts_with("unix://") => {
             let socket_path = &h[7..];

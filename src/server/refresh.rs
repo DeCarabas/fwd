@@ -10,7 +10,7 @@ use crate::message::PortDesc;
 mod procfs;
 
 #[cfg(unix)]
-mod docker;
+pub mod docker;
 
 pub async fn get_entries(_send_anonymous: bool) -> Result<Vec<PortDesc>> {
     #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]

@@ -5,7 +5,7 @@ use log::{error, warn};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::sync::mpsc;
 
-mod refresh;
+pub mod refresh;
 
 // We drive writes through an mpsc queue, because we not only handle requests
 // and responses from the client (refresh ports and the like) but also need

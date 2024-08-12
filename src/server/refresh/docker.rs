@@ -77,7 +77,7 @@ async fn list_containers() -> Result<Vec<u8>> {
 }
 
 #[derive(Debug, PartialEq)]
-enum JsonValue {
+pub enum JsonValue {
     Null,
     True,
     False,
@@ -207,7 +207,7 @@ impl JsonValue {
                         }
                         i += 1;
                     }
-                    if i == blob.len() {
+                    if i >= blob.len() {
                         bail!("Unterminated string at {i}");
                     }
                     assert_eq!(blob[i], b'"');
@@ -873,5 +873,11 @@ mod test {
             ]))
         ]);
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    pub fn json_decode_unterminated_string_with_escape() {
+        let input = b"\"\\";
+        let _ = JsonValue::parse(input);
     }
 }

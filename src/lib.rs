@@ -1,7 +1,7 @@
 mod client;
 mod message;
 mod reverse;
-mod server;
+pub mod server;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const REV: &str = env!("REPO_REV");

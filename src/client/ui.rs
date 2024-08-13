@@ -323,10 +323,10 @@ impl UI {
     }
 
     fn render_ports(&mut self, frame: &mut Frame, size: Rect) {
-        let enabled_port_style = Style::default();
-        let disabled_port_style = Style::default().fg(Color::DarkGray);
+        let enabled_port_style = Style::reset();
+        let disabled_port_style = Style::reset().fg(Color::DarkGray);
         let broken_port_style =
-            Style::default().fg(Color::Red).add_modifier(Modifier::DIM);
+            Style::reset().fg(Color::Red).add_modifier(Modifier::DIM);
 
         let mut rows = Vec::new();
         let ports = self.get_ui_ports();
@@ -399,7 +399,8 @@ impl UI {
         ];
         let keybindings = Table::new(keybindings, keybindings_widths)
             .column_spacing(1)
-            .block(Block::default().title("Keys").borders(Borders::ALL));
+            .block(Block::default().title("Keys").borders(Borders::ALL))
+            .style(Style::reset());
 
         // keybindings
         frame.render_widget(keybindings, inner_area);

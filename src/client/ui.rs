@@ -14,15 +14,8 @@ use crossterm::{
     },
 };
 use log::{error, info, warn, Level, Metadata, Record};
-use std::collections::vec_deque::VecDeque;
-use std::collections::{HashMap, HashSet};
-use std::io::stdout;
-use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
-use tokio_stream::StreamExt;
-use tui::{
-    backend::{Backend, CrosstermBackend},
+use ratatui::{
+    backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     widgets::{
@@ -30,6 +23,13 @@ use tui::{
     },
     Frame, Terminal,
 };
+use std::collections::vec_deque::VecDeque;
+use std::collections::{HashMap, HashSet};
+use std::io::stdout;
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
+use tokio_stream::StreamExt;
 
 pub enum UIEvent {
     Connected(u16),
@@ -301,7 +301,7 @@ impl UI {
         Ok(code)
     }
 
-    fn render_connected<T: Backend>(&mut self, frame: &mut Frame<T>) {
+    fn render_connected(&mut self, frame: &mut Frame) {
         let constraints = if self.show_logs {
             vec![Constraint::Percentage(50), Constraint::Percentage(50)]
         } else {
@@ -311,7 +311,7 @@ impl UI {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(constraints)
-            .split(frame.size());
+            .split(frame.area());
 
         self.render_ports(frame, chunks[0]);
         if self.show_logs {
@@ -322,7 +322,7 @@ impl UI {
         }
     }
 
-    fn render_ports<B: Backend>(&mut self, frame: &mut Frame<B>, size: Rect) {
+    fn render_ports(&mut self, frame: &mut Frame, size: Rect) {
         let enabled_port_style = Style::default();
         let disabled_port_style = Style::default().fg(Color::DarkGray);
         let broken_port_style =
@@ -358,17 +358,16 @@ impl UI {
             Constraint::Length(size.width),
         ];
 
-        let port_list = Table::new(rows)
+        let port_list = Table::new(rows, &widths)
             .header(Row::new(vec!["fwd", "Port", "Description"]))
             .block(Block::default().title("Ports").borders(Borders::ALL))
             .column_spacing(1)
-            .widths(&widths)
             .highlight_symbol(">> ");
 
         frame.render_stateful_widget(port_list, size, &mut self.selection);
     }
 
-    fn render_help<B: Backend>(&mut self, frame: &mut Frame<B>) {
+    fn render_help(&mut self, frame: &mut Frame) {
         let keybindings = vec![
             Row::new(vec!["↑ / k", "Move cursor up"]),
             Row::new(vec!["↓ / j", "Move cursor down"]),
@@ -387,10 +386,10 @@ impl UI {
         let help_popup_area = centered_rect(
             65,
             keybindings.len() as u16 + border_lines,
-            frame.size(),
+            frame.area(),
         );
         let inner_area =
-            help_popup_area.inner(&Margin { vertical: 1, horizontal: 1 });
+            help_popup_area.inner(Margin { vertical: 1, horizontal: 1 });
         let key_width = 7;
         let binding_width = inner_area.width.saturating_sub(key_width);
 
@@ -398,8 +397,7 @@ impl UI {
             Constraint::Length(key_width),
             Constraint::Length(binding_width),
         ];
-        let keybindings = Table::new(keybindings)
-            .widths(keybindings_widths)
+        let keybindings = Table::new(keybindings, keybindings_widths)
             .column_spacing(1)
             .block(Block::default().title("Keys").borders(Borders::ALL));
 
@@ -407,7 +405,7 @@ impl UI {
         frame.render_widget(keybindings, inner_area);
     }
 
-    fn render_logs<B: Backend>(&mut self, frame: &mut Frame<B>, size: Rect) {
+    fn render_logs(&mut self, frame: &mut Frame, size: Rect) {
         let items: Vec<_> =
             self.lines.iter().map(|l| ListItem::new(&l[..])).collect();
 

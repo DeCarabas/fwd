@@ -84,6 +84,9 @@ jobs:
         echo "TARGET_FLAGS=--target ${{ matrix.target }}" >> $GITHUB_ENV
         echo "TARGET_DIR=./target/${{ matrix.target }}" >> $GITHUB_ENV
 
+    - name: Run the tests
+      run: ${{ env.CARGO }} test --verbose --release ${{ env.TARGET_FLAGS }}
+
     - name: Build release binary
       run: ${{ env.CARGO }} build --verbose --release ${{ env.TARGET_FLAGS }}
 

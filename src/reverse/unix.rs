@@ -55,7 +55,8 @@ fn socket_directory() -> Result<std::path::PathBuf> {
         Ok(path) => Ok(path),
         Err(_) => {
             let mut path = std::env::temp_dir();
-            path.push(format!("fwd{}", users::get_current_uid()));
+            let uid = unsafe { libc::getuid() };
+            path.push(format!("fwd{}", uid));
             Ok(path)
         }
     }

@@ -117,7 +117,7 @@ async fn handle_connection(
 mod tests {
     use super::*;
     use crate::message::MessageWriter;
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     #[test]
     fn socket_path_repeats() {
@@ -131,8 +131,8 @@ mod tests {
     async fn url_to_message() {
         let (sender, mut receiver) = mpsc::channel(64);
 
-        let tmp_dir =
-            TempDir::new("url_to_message").expect("Error getting tmpdir");
+        let tmp_dir = TempDir::with_prefix("url_to_message")
+            .expect("Error getting tmpdir");
         let path = tmp_dir.path().join("socket");
 
         let path_override = path.clone();

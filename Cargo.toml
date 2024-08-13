@@ -34,7 +34,7 @@ xdg = "2"
 [dev-dependencies]
 assert_matches = "1"
 pretty_assertions = "1"
-tempdir = "0.3"
+tempfile = "3"
 
 [target.'cfg(target_os="linux")'.dependencies]
 procfs = "0.14.1"

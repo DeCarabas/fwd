@@ -13,27 +13,43 @@ on:
     tags:
     - "v[0-9]+.[0-9]+.[0-9]+"
 
+permissions:
+  contents: write
+
 jobs:
   create_release:
     name: Create release
-    runs-on: ubuntu-22.04
-
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the release version
+        if: env.VERSION == ''
+        run: echo "VERSION=${{ github.ref_name }}" >> $GITHUB_ENV
+
+      - name: Show the version
+        run: |
+          echo "version is: $VERSION"
+
+      - name: Check that tag version and Cargo.toml version are the same
+        shell: bash
+        run: |
+          if ! grep -q "version = \"$VERSION\"" Cargo.toml; then
+            echo "version does not match Cargo.toml" >&2
+            exit 1
+          fi
+
       - name: Create GitHub release
-        id: create_release
-        uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: true
+        run: gh release create $VERSION --draft --verify-tag --title $VERSION
 
-  release_assets:
-    name: Release assets
+    outputs:
+        version: ${{ env.VERSION }}
+
+  build_release:
+    name: Build all the stuff
     needs: ['create_release'] # We need to know the upload URL
     runs-on: ${{ matrix.os }} # We run many different builds
     env:
@@ -48,6 +64,7 @@ jobs:
       RUST_BACKTRACE: 1
 
     strategy:
+      fail-fast: false
       matrix:
         build: ['linux', 'macos', 'arm-macos', 'windows']
         include:
@@ -114,11 +131,9 @@ jobs:
         fi
 
     - name: Upload release archive
-      uses: actions/upload-release-asset@v1.0.2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ needs.create_release.outputs.upload_url }}
-        asset_name: ${{ env.ASSET }}
-        asset_path: ${{ env.ASSET }}
-        asset_content_type: application/octet-stream
+      shell: bash
+      run: |
+        version="${{ needs.create_release.outputs.version }}"
+        gh release upload "$version" ${{ env.ASSET }}

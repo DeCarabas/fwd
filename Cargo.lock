@@ -320,7 +320,7 @@ checksum = "eb1d22c66e66d9d72e1758f0bd7d4fd0bee04cad842ee34587d68c07e45d088c"
 
 [[package]]
 name = "fwd"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "assert_matches",

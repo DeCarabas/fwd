@@ -70,15 +70,15 @@ The following commands are available while **fwd** is connected:
 **fwd** enumerates all of the ports that the remote server is listening on, and attempts to identify the process that is listening on each port.
 It can identify ports in the following ways:
 
-*With docker*
+*docker*
 :    **fwd** will attempt to find and connect to a docker engine on the remote machine.
 :    If successful, it will list all of the forwarded ports, and identify each port as belonging to that docker container.
 
-*With procfs*
+*procfs*
 :    On Linux, the listening ports are found by reading procfs and mapping them back to process command lines.
 :    **fwd** can only identify processes that the user it is connected as has permissions to read on the remote machine.
 
-Earlier methods take precedence over later methods.
+(Earlier methods take precedence over later methods.)
 
 If **fwd** cannot identify the process that is listening on a given port, then the port is *anonymous*.
 Anonymous ports are not enabled by default, but can be enabled manually, either with the UI or by configuration.

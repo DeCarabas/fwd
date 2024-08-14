@@ -62,13 +62,15 @@ impl Config {
 pub fn load_config() -> Result<Config> {
     use std::io::ErrorKind;
 
-    let mut home = match home::home_dir() {
-        Some(h) => h,
-        None => return Ok(default()),
+    let Some(directories) = directories_next::ProjectDirs::from("", "", "fwd")
+    else {
+        return Ok(default());
     };
-    home.push(".fwd");
 
-    let contents = match std::fs::read_to_string(home) {
+    let mut config_path = directories.config_dir().to_path_buf();
+    config_path.push("config.toml");
+
+    let contents = match std::fs::read_to_string(config_path) {
         Ok(contents) => contents,
         Err(e) => match e.kind() {
             ErrorKind::NotFound => return Ok(default()),

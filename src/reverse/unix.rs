@@ -49,11 +49,11 @@ pub fn socket_path() -> Result<PathBuf> {
 }
 
 fn socket_directory() -> Result<std::path::PathBuf> {
-    let base_directories = xdg::BaseDirectories::new()
-        .context("Error creating BaseDirectories")?;
-    match base_directories.place_runtime_file("fwd") {
-        Ok(path) => Ok(path),
-        Err(_) => {
+    match directories_next::ProjectDirs::from("", "", "fwd")
+        .and_then(|p| p.runtime_dir().map(|p| p.to_path_buf()))
+    {
+        Some(p) => Ok(p),
+        None => {
             let mut path = std::env::temp_dir();
             let uid = unsafe { libc::getuid() };
             path.push(format!("fwd{}", uid));

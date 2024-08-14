@@ -19,10 +19,10 @@ to send the the contents of `file`.
 Options:
     --version    Print the version of fwd and exit
     --sudo, -s   Run the server side of fwd with `sudo`. This allows the
-                 client to forward ports that are open by processes being
-                 run under other accounts (e.g., docker containers being
-                 run as root), but requires sudo access on the server and
-                 *might* end up forwarding ports that you do not want
+                 client to identify the ports that are open by processes
+                 being run under other accounts (e.g., docker containers
+                 being run as root), but requires sudo access on the server
+                 and *might* end up forwarding ports that you do not want
                  forwarded (e.g., port 22 for sshd, or port 53 for systemd.)
     --log-filter FILTER
                  Set remote server's log level. Default is `warn`. Supports

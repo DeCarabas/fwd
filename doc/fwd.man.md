@@ -109,14 +109,15 @@ If **FILE** is **-**, this reads text from stdin instead.
 The following is an example of a *config.toml* file:
 
 ```
-auto=true                # should `fwd` should enable identified ports
+auto=true   # should `fwd` should enable identified ports (default true)
 
-[servers.foo]            # Server-specific settings for foo
-auto=true
-ports=[1080, 1082]       # ports that are always present
+[servers.foo]       # Server-specific settings for foo
+auto=true           # defaults to the global setting
+ports=[1080, 1082]  # ports that are always present
 
-[servers.bar.ports]      # `ports` can also be a table with port numbers as keys
-1080=true                # the values can be booleans (for enabled)
+[servers.bar.ports] # `ports` can also be a table with port numbers as keys
+1080=true           # the values can be booleans (for enabled)...
+1081="My program"   # or strings (for descriptions).
 
 [servers.bar.ports.1082] # port values can also be tables
 enabled=true

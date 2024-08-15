@@ -74,6 +74,18 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Install packages (linux)
+      if: matrix.build == 'linux'
+      run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc
+
+    - name: Install packages (macos)
+      if: matrix.build == 'macos' || matrix.build == 'arm-macos'
+      run: |
+          brew update
+          brew install pandoc
+
     - name: Install rust
       uses: dtolnay/rust-toolchain@stable
       with:

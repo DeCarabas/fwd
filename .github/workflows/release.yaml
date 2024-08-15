@@ -1,10 +1,3 @@
-# From https://github.com/BurntSushi/ripgrep/blob/master/.github/workflows/release.yml
-# Which is also via https://eugene-babichenko.github.io/blog/2020/05/09/github-actions-cross-platform-auto-releases/
-# ...both of which are very good.
-#
-# I'm sure I don't need half the stuff I have in here (around cargo
-# customization and whatnot) but.
-#
 name: release
 
 on:
@@ -53,13 +46,6 @@ jobs:
     needs: ['create_release'] # We need to know the upload URL
     runs-on: ${{ matrix.os }} # We run many different builds
     env:
-      # For some builds, we use cross to test on 32-bit and big-endian
-      # systems.
-      CARGO: cargo
-      # When CARGO is set to CROSS, this is set to `--target matrix.target`.
-      TARGET_FLAGS: ""
-      # When CARGO is set to CROSS, TARGET_DIR includes matrix.target.
-      TARGET_DIR: ./target
       # Emit backtraces on panics.
       RUST_BACKTRACE: 1
 
@@ -88,52 +74,14 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Install Rust
+    - name: Install rust
       uses: dtolnay/rust-toolchain@stable
       with:
         target: ${{ matrix.target }}
 
-    - name: Use Cross
+    - name: Run the release automation
       shell: bash
-      run: |
-        cargo install cross
-        echo "CARGO=cross" >> $GITHUB_ENV
-        echo "TARGET_FLAGS=--target ${{ matrix.target }}" >> $GITHUB_ENV
-        echo "TARGET_DIR=./target/${{ matrix.target }}" >> $GITHUB_ENV
-
-    - name: Run the tests
-      run: ${{ env.CARGO }} test --verbose --release ${{ env.TARGET_FLAGS }}
-
-    - name: Build release binary
-      run: ${{ env.CARGO }} build --verbose --release ${{ env.TARGET_FLAGS }}
-
-    - name: Strip release binary (linux and macos)
-      if: matrix.build == 'linux' || matrix.build == 'macos' || matrix.build == 'arm-macos'
-      run: |
-        strip "target/${{ matrix.target }}/release/fwd"
-        strip "target/${{ matrix.target }}/release/fwd-browse"
-
-    - name: Build archive
-      shell: bash
-      run: |
-        staging="fwd-${{ matrix.target }}"
-        mkdir -p "$staging"
-
-        if [ "${{ matrix.os }}" = "windows-2022" ]; then
-          cp "target/${{ matrix.target }}/release/fwd.exe" "$staging/"
-          7z a "$staging.zip" "$staging"
-          echo "ASSET=$staging.zip" >> $GITHUB_ENV
-        else
-          cp "target/${{ matrix.target }}/release/fwd" "$staging/"
-          cp "target/${{ matrix.target }}/release/fwd-browse" "$staging/"
-          tar czf "$staging.tar.gz" "$staging"
-          echo "ASSET=$staging.tar.gz" >> $GITHUB_ENV
-        fi
-
-    - name: Upload release archive
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      shell: bash
-      run: |
-        version="${{ needs.create_release.outputs.version }}"
-        gh release upload "$version" ${{ env.ASSET }}
+        RELEASE_TAG: ${{ needs.create_release.outputs.version }}
+        BUILD: ${{ matrix.build }}
+      run: python3 release.py

@@ -88,4 +88,5 @@ jobs:
       env:
         RELEASE_TAG: ${{ needs.create_release.outputs.version }}
         BUILD: ${{ matrix.build }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: python3 release.py

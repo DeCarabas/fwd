@@ -44,36 +44,45 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build: ['linux', 'macos', 'arm-macos', 'windows']
+        build: ['linux', 'debian', 'macos', 'arm-macos', 'windows']
         include:
         - build: linux
           os: ubuntu-22.04
           target: x86_64-unknown-linux-musl
+          packages: apt
+
+        - build: debian
+          os: ubuntu-22.04
+          target: x86_64-unknown-linux-musl
+          packages: apt
 
         - build: macos
           os: macos-latest
           target: x86_64-apple-darwin
+          packages: brew
 
         - build: arm-macos
           os: macos-latest
           target: aarch64-apple-darwin
+          packages: brew
 
         - build: windows
           os: windows-2022
           target: x86_64-pc-windows-msvc
+          packages: none
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
     - name: Install packages (linux)
-      if: matrix.build == 'linux'
+      if: matrix.packages == 'apt'
       run: |
           sudo apt-get update
           sudo apt-get install -y pandoc
 
     - name: Install packages (macos)
-      if: matrix.build == 'macos' || matrix.build == 'arm-macos'
+      if: matrix.packages == 'brew'
       run: |
           brew update
           brew install pandoc

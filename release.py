@@ -5,6 +5,7 @@ little nicer for running commands, it's worse at everything else.
 """
 
 import dataclasses
+import enum
 import os
 import os.path
 import pathlib
@@ -18,20 +19,31 @@ if BUILD is None:
     raise Exception("you *must* set the BUILD environment variable")
 
 
+class Archive(enum.Enum):
+    TARBALL = 1
+    ZIP = 2
+    DEB = 3
+
+
 @dataclasses.dataclass
 class BuildSettings:
-    target: str
-    test: bool = True
-    man_page: bool = True
-    strip: bool = True
-    windows: bool = False
-    ext: str = ""
+    target: str  # The rust target to build for
+    test: bool = True  # Whether or not to run tests
+    man_page: bool = True  # Whether or not to generate a man page
+    strip: bool = True  # Whether or not to strip binaries
+    archive: Archive = Archive.TARBALL  # Archive type
+    ext: str = ""  # The file extension of the binary
 
 
 print(f"doing release: {BUILD}")
 build = {
     "linux": BuildSettings(
         target="x86_64-unknown-linux-musl",
+    ),
+    "deb": BuildSettings(
+        target="x86_64-unknown-linux-musl",
+        test=False,
+        archive=Archive.DEB,
     ),
     "macos": BuildSettings(
         target="x86_64-apple-darwin",
@@ -43,7 +55,7 @@ build = {
         target="x86_64-pc-windows-msvc",
         strip=False,
         man_page=False,
-        windows=True,
+        archive=Archive.ZIP,
         ext=".exe",
     ),
 }[BUILD]
@@ -100,29 +112,50 @@ def build_docs(staging: pathlib.Path):
             f.write(contents)
 
 
+def build_archive(staging: pathlib.Path) -> pathlib.Path:
+    print("Creating archive...")
+    if build.archive == Archive.ZIP:
+        archive = pathlib.Path(f"{staging}.zip")
+        subprocess.run(["7z", "a", archive, f"{staging}"], check=True)
+
+    elif build.archive == Archive.DEB:
+        subprocess.run(["cargo", "install", "cargo-deb"], check=True)
+        shutil.copyfile(staging / "fwd.1", target_dir / "fwd.1")
+        subprocess.run(["cargo", "deb", "--target", build.target], check=True)
+
+        # Knowing the deb path means knowing the target version but I don't
+        # actually have the version here. (Or, like, I have the release tag
+        # but not in testing.) So just find the hopefully singular .deb that
+        # we made.
+        deb_path = pathlib.Path("target") / build.target / "debian"
+        archives = list(deb_path.glob("*.deb"))
+        assert len(archives) == 1
+        archive = archives[0]
+
+    else:
+        assert build.archive == Archive.TARBALL
+        archive = pathlib.Path(f"{staging}.tar.gz")
+        subprocess.run(["tar", "czf", archive, f"{staging}"], check=True)
+
+    return archive
+
+
 staging = pathlib.Path(f"fwd-{build.target}")
 os.makedirs(staging, exist_ok=True)
 
 build_and_test(staging)
 build_docs(staging)
-
-print("Creating archive...")
-if build.windows:
-    archive = f"{staging}.zip"
-    subprocess.run(["7z", "a", archive, f"{staging}"], check=True)
-else:
-    archive = f"{staging}.tar.gz"
-    subprocess.run(["tar", "czf", archive, f"{staging}"], check=True)
+archive = build_archive(staging)
 
 shutil.rmtree(staging)
 
+assert archive.exists()
 if RELEASE_TAG is None:
-    print("Not releasing to github, RELEASE_TAG is none.")
+    print(f"Not releasing {archive} to github, RELEASE_TAG is none.")
 else:
     print(f"Uploading {archive} to github release {RELEASE_TAG}...")
     subprocess.run(
         ["gh", "release", "upload", RELEASE_TAG, archive, "--clobber"],
         check=True,
     )
-
-os.unlink(archive)
+    os.unlink(archive)

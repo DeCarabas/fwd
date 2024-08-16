@@ -40,7 +40,7 @@ build = {
     "linux": BuildSettings(
         target="x86_64-unknown-linux-musl",
     ),
-    "deb": BuildSettings(
+    "debian": BuildSettings(
         target="x86_64-unknown-linux-musl",
         test=False,
         archive=Archive.DEB,

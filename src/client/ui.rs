@@ -479,7 +479,7 @@ impl UI {
     fn enter_alternate_screen(&mut self) -> Result<()> {
         if !self.alternate_screen {
             enable_raw_mode()?;
-            execute!(stdout(), EnterAlternateScreen, DisableLineWrap)?;
+            execute!(stdout(), EnterAlternateScreen, DisableLineWrap,)?;
             self.alternate_screen = true;
         }
         Ok(())

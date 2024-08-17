@@ -14,7 +14,7 @@ doty@my.laptop$ fwd some.server
 
 `fwd` will connect to `some.server` via ssh, and then show you a screen listing all of the ports that the server is listening on locally.
 
-<img width="1337" src="doc/screenshot01.png" alt="A terminal displaying a list of ports and descriptions. Some are dimmed and one is highlighted." />
+<img width="1337" src="doc/screenshot-01.png" alt="A terminal displaying a list of ports and descriptions. Some are dimmed and one is highlighted." />
 
 Use the up and down arrow keys (or `j`/`k`) to select the port you're interested in and press `e` to toggle forwarding of that port.
 Now, connections to that port locally will be forwarded to the remote server.

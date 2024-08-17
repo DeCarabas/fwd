@@ -59,11 +59,16 @@ The following commands are available while **fwd** is connected:
 **Enter**
 :    Attempt to browse to localhost on the specified port with the default browser.
 
+**a**
+:    Hide or show anonymous ports.
+:    (See "identifying ports" below for more information on anonymous ports.)
+
 **e**
 :    Enable or disable the selected port.
 
 **l**
 :    Show or hide the log window.
+
 
 # IDENTIFYING PORTS
 

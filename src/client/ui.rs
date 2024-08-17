@@ -155,6 +155,16 @@ impl Listener {
         ""
     }
 
+    pub fn is_anonymous(&self) -> bool {
+        // Anonynous ports are not configured and came from the server but
+        // had no description there.
+        self.config.is_none()
+            && match self.desc.as_ref() {
+                Some(desc) => desc.desc.is_empty(),
+                None => false,
+            }
+    }
+
     fn state(&self) -> State {
         *self.state.lock().unwrap()
     }
@@ -223,6 +233,7 @@ pub struct UI {
     show_help: bool,
     alternate_screen: bool,
     raw_mode: bool,
+    show_anonymous: bool,
     clipboard: Option<ClipboardContext>,
 }
 
@@ -247,6 +258,7 @@ impl UI {
             config,
             alternate_screen: false,
             raw_mode: false,
+            show_anonymous: true,
             clipboard,
         }
     }
@@ -334,6 +346,10 @@ impl UI {
             ports.iter().map(|p| format!("{p}")).collect();
         for (index, port) in ports.into_iter().enumerate() {
             let listener = self.ports.get(&port).unwrap();
+            if !self.should_render_listener(listener) {
+                continue;
+            }
+
             let (symbol, style) = match listener.state() {
                 State::Enabled => (" ✓ ", enabled_port_style),
                 State::Broken => (" ✗ ", broken_port_style),
@@ -379,6 +395,7 @@ impl UI {
             Row::new(vec!["ESC / q", "Quit"]),
             Row::new(vec!["? / h", "Show this help text"]),
             Row::new(vec!["l", "Show fwd's logs"]),
+            Row::new(vec!["a", "Hide/show anonymous ports"]),
         ];
 
         let border_lines = 3;
@@ -475,6 +492,19 @@ impl UI {
             self.alternate_screen = false;
         }
         Ok(())
+    }
+
+    fn toggle_show_anonymous(&mut self) {
+        self.show_anonymous = !self.show_anonymous;
+    }
+
+    fn should_render_listener(&self, listener: &Listener) -> bool {
+        // Named/Configured ports are always rendered
+        !listener.is_anonymous()
+            // ...or we might be explicitly asked to render everything
+            || self.show_anonymous
+            // ...or the port might be enabled or errored
+            || listener.state() != State::Disabled
     }
 
     async fn handle_events(&mut self, console_events: &mut EventStream) {
@@ -584,6 +614,10 @@ impl UI {
                         _ = open::that(format!("http://127.0.0.1:{}/", p));
                     }
                 }
+                KeyEvent { code: KeyCode::Char('a'), .. } => {
+                    self.toggle_show_anonymous()
+                }
+
                 _ => (),
             },
             Some(Ok(_)) => (), // Don't care about this event...
@@ -1247,6 +1281,120 @@ mod tests {
         ui.enable_disable_port(8080);
         let listener = ui.ports.get_mut(&8080).unwrap();
         assert_eq!(listener.state(), State::Disabled);
+
+        drop(sender);
+    }
+
+    #[test]
+    fn listener_anonymous() {
+        let (sender, receiver) = mpsc::channel(64);
+        let mut config = ServerConfig::default();
+        config.insert(
+            8079,
+            PortConfig {
+                enabled: false,
+                description: Some("body once told me".to_string()),
+            },
+        );
+
+        let mut ui = UI::new(receiver, config);
+
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![
+            PortDesc {
+                port: 8080,
+                desc: "python3 blaster.py".to_string(),
+            },
+            PortDesc { port: 8081, desc: "".to_string() },
+            PortDesc { port: 8082, desc: "".to_string() },
+        ])));
+
+        // (Pretend that 8082 broke.)
+        ui.ports.get_mut(&8082).unwrap().state = State::Broken.boxed();
+
+        let listener = ui.ports.get(&8079).unwrap();
+        assert!(
+            !listener.is_anonymous(),
+            "Configured ports should not be anonymous"
+        );
+
+        let listener = ui.ports.get(&8080).unwrap();
+        assert!(
+            !listener.is_anonymous(),
+            "Ports with descriptions should not be anonymous"
+        );
+
+        let listener = ui.ports.get(&8081).unwrap();
+        assert!(
+            listener.is_anonymous(),
+            "Not configured, disabled, no description should be anonymous"
+        );
+
+        drop(sender);
+    }
+
+    #[test]
+    fn render_anonymous() {
+        let (sender, receiver) = mpsc::channel(64);
+        let mut config = ServerConfig::default();
+        config.insert(
+            8079,
+            PortConfig {
+                enabled: false,
+                description: Some("body once told me".to_string()),
+            },
+        );
+
+        let mut ui = UI::new(receiver, config);
+
+        ui.handle_internal_event(Some(UIEvent::Ports(vec![
+            PortDesc {
+                port: 8080,
+                desc: "python3 blaster.py".to_string(),
+            },
+            PortDesc { port: 8081, desc: "".to_string() },
+            PortDesc { port: 8082, desc: "".to_string() },
+            PortDesc { port: 8083, desc: "".to_string() },
+        ])));
+
+        // (Pretend that 8082 broke.)
+        ui.ports.get_mut(&8082).unwrap().state = State::Broken.boxed();
+
+        // No showing anonymous ports!
+        ui.show_anonymous = false;
+
+        let listener = ui.ports.get(&8079).unwrap();
+        assert!(
+            ui.should_render_listener(listener),
+            "Configured ports should always be rendered"
+        );
+
+        let listener = ui.ports.get(&8080).unwrap();
+        assert!(
+            ui.should_render_listener(listener),
+            "Ports with descriptions should be rendered"
+        );
+
+        let listener = ui.ports.get(&8081).unwrap();
+        assert!(
+            !ui.should_render_listener(listener),
+            "Not configured, disabled, no description should be hidden"
+        );
+
+        ui.enable_disable_port(8081);
+
+        let listener = ui.ports.get(&8081).unwrap();
+        assert_eq!(listener.state(), State::Enabled);
+        assert!(
+            ui.should_render_listener(listener),
+            "Enabled ports should be rendered"
+        );
+
+        let listener = ui.ports.get(&8082).unwrap();
+        assert_eq!(listener.state(), State::Broken);
+        assert!(
+            ui.should_render_listener(listener),
+            "Broken ports should be rendered"
+        );
 
         drop(sender);
     }
